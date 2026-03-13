@@ -5,6 +5,8 @@ use bevy::ecs::message::MessageReader;
 use bevy::ecs::query::{Has, With, Without};
 use bevy::ecs::system::{Commands, Query, Res, ResMut, Single};
 use bevy::math::IRect;
+use objc2_core_graphics::CGDirectDisplayID;
+use tracing::debug;
 use tracing::{Level, instrument};
 use tracing::{debug, info};
 
@@ -59,6 +61,8 @@ pub enum Operation {
     FullWidth,
     /// Moves the focused window to the next available display.
     ToNextDisplay(MoveFocus),
+    /// Moves the focused window to a specific display.
+    ToDisplay(CGDirectDisplayID),
     /// Distributes heights equally among windows in the focused stack.
     Equalize,
     /// Toggles the managed state of the focused window.
@@ -79,6 +83,8 @@ pub enum Operation {
 pub enum MouseMove {
     /// Moves the mouse pointer to the next available display.
     ToNextDisplay,
+    /// Moves the mouse pointer to a specific display.
+    ToDisplay(CGDirectDisplayID),
 }
 
 /// Represents a command that can be issued to the window manager.
@@ -256,18 +262,24 @@ fn command_move_focus(
     }
 
     // Check if the movement can switch to another display.
-    let Some(other_display) = active_display.other().next() else {
-        return;
+    let active_y = active_display.bounds().min.y;
+    let target_id = match direction {
+        Direction::North => active_display
+            .other()
+            .filter(|d| d.bounds().min.y < active_y)
+            .max_by_key(|d| d.bounds().min.y)
+            .map(|d| d.id()),
+        Direction::South => active_display
+            .other()
+            .filter(|d| d.bounds().min.y > active_y)
+            .min_by_key(|d| d.bounds().min.y)
+            .map(|d| d.id()),
+        _ => None,
     };
-    let change_display = match direction {
-        Direction::North => active_display.bounds().min.y > other_display.bounds().min.y,
-        Direction::South => active_display.bounds().min.y < other_display.bounds().min.y,
-        _ => false,
-    };
-    debug!("moving focus to another display: {change_display}");
-    if change_display {
+    if let Some(id) = target_id {
+        debug!("moving focus to display {id}");
         commands.trigger(SendMessageTrigger(Event::Command {
-            command: Command::Mouse(MouseMove::ToNextDisplay),
+            command: Command::Mouse(MouseMove::ToDisplay(id)),
         }));
     }
 }
@@ -336,19 +348,24 @@ fn command_swap_focus(
         .is_none()
     {
         // Check if the movement can swap to another display.
-        let bounds = active_display.bounds();
-        let Some(other_display) = active_display.other().next() else {
-            return;
+        let active_y = active_display.bounds().min.y;
+        let target_id = match direction {
+            Direction::North => active_display
+                .other()
+                .filter(|d| d.bounds().min.y < active_y)
+                .max_by_key(|d| d.bounds().min.y)
+                .map(|d| d.id()),
+            Direction::South => active_display
+                .other()
+                .filter(|d| d.bounds().min.y > active_y)
+                .min_by_key(|d| d.bounds().min.y)
+                .map(|d| d.id()),
+            _ => None,
         };
-        let change_display = match direction {
-            Direction::North => bounds.min.y > other_display.bounds().min.y,
-            Direction::South => bounds.min.y < other_display.bounds().min.y,
-            _ => false,
-        };
-        debug!("swapping window to another display: {change_display}");
-        if change_display {
+        if let Some(id) = target_id {
+            debug!("swapping window to display {id}");
             commands.trigger(SendMessageTrigger(Event::Command {
-                command: Command::Window(Operation::ToNextDisplay(MoveFocus::Follow)),
+                command: Command::Window(Operation::ToDisplay(id)),
             }));
         }
     }
@@ -605,12 +622,15 @@ fn to_next_display(
     window_manager: Res<WindowManager>,
     mut commands: Commands,
 ) {
-    let Some(Operation::ToNextDisplay(move_focus)) =
-        filter_window_operations(&mut messages, |op| {
-            matches!(op, Operation::ToNextDisplay(_))
-        })
-        .next()
-    else {
+    let target_id = filter_window_operations(&mut messages, |op| {
+        matches!(op, Operation::ToNextDisplay(_) | Operation::ToDisplay(_))
+    })
+    .find_map(|op| match op {
+        Operation::ToNextDisplay(move_focus) => Some((None, *move_focus)),
+        Operation::ToDisplay(id) => Some((Some(*id), MoveFocus::Follow)),
+        _ => None,
+    });
+    let Some((target_id, move_focus)) = target_id else {
         return;
     };
 
@@ -624,7 +644,11 @@ fn to_next_display(
         return;
     }
 
-    let Some(other) = active_display.other().next() else {
+    let Some(other) = (if let Some(id) = target_id {
+        active_display.other().find(|d| d.id() == id)
+    } else {
+        active_display.other().next()
+    }) else {
         debug!("no other display to move window to.");
         return;
     };
@@ -687,18 +711,24 @@ fn mouse_to_next_display(
     mut ffm_flag: ResMut<FocusFollowsMouse>,
     mut commands: Commands,
 ) {
-    if !messages.read().any(|event| {
-        matches!(
-            event,
-            Event::Command {
-                command: Command::Mouse(MouseMove::ToNextDisplay),
-            }
-        )
-    }) {
+    let target_id = messages.read().find_map(|event| match event {
+        Event::Command {
+            command: Command::Mouse(MouseMove::ToDisplay(id)),
+        } => Some(Some(*id)),
+        Event::Command {
+            command: Command::Mouse(MouseMove::ToNextDisplay),
+        } => Some(None),
+        _ => None,
+    });
+    let Some(target_id) = target_id else {
         return;
-    }
+    };
 
-    let Some((other, _, _)) = displays.iter().find(|(_, _, active)| !*active) else {
+    let Some((other, _, _)) = (if let Some(id) = target_id {
+        displays.iter().find(|(d, _, _)| d.id() == id)
+    } else {
+        displays.iter().find(|(_, _, active)| !*active)
+    }) else {
         debug!("no other display to move mouse to.");
         return;
     };
