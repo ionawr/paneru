@@ -6,7 +6,6 @@ use bevy::ecs::query::{Has, With, Without};
 use bevy::ecs::system::{Commands, Query, Res, ResMut, Single};
 use bevy::math::IRect;
 use objc2_core_graphics::CGDirectDisplayID;
-use tracing::debug;
 use tracing::{Level, instrument};
 use tracing::{debug, info};
 
