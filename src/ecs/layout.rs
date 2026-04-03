@@ -743,14 +743,12 @@ fn binpack_heights(heights: &[i32], min_height: i32, total_height: i32) -> Optio
 }
 
 /// Computes (y_offset, height) pairs for accordion layout using AeroSpace-style
-/// overlapping. All windows get nearly the same full-sized frame at the same
-/// origin. Padding insets create visible slivers of non-focused windows.
-///
-/// The focused window's neighbours get `2 * padding` inset to create a clearer gap.
-/// Edge windows (first/last) are flush to the viewport edge on their outer side.
+/// overlapping. Each window is offset by `i * padding` from the top and shares
+/// the same height. The focused window is drawn on top via z-order, so only
+/// `padding`-pixel slivers of non-focused windows are visible, all uniformly sized.
 fn accordion_frames(
     count: usize,
-    focused_index: usize,
+    _focused_index: usize,
     total_height: i32,
     padding: i32,
 ) -> Vec<(i32, i32)> {
@@ -761,33 +759,12 @@ fn accordion_frames(
         return vec![(0, total_height)];
     }
 
+    let n = i32::try_from(count).unwrap_or(1);
+    let height = (total_height - (n - 1) * padding).max(200);
+
     (0..count)
         .map(|i| {
-            let is_first = i == 0;
-            let is_last = i == count - 1;
-
-            let (top_pad, bottom_pad) = if i == focused_index {
-                // Focused window: inset by one padding per side for each neighbour
-                let top = if is_first { 0 } else { padding };
-                let bottom = if is_last { 0 } else { padding };
-                (top, bottom)
-            } else if i + 1 == focused_index {
-                // Directly above focused
-                let top = if is_first { 0 } else { padding };
-                (top, 2 * padding)
-            } else if i == focused_index + 1 {
-                // Directly below focused
-                let bottom = if is_last { 0 } else { padding };
-                (2 * padding, bottom)
-            } else {
-                // Other non-focused windows
-                let top = if is_first { 0 } else { padding };
-                let bottom = if is_last { 0 } else { padding };
-                (top, bottom)
-            };
-
-            let y = top_pad;
-            let height = total_height - top_pad - bottom_pad;
+            let y = i32::try_from(i).unwrap_or(0) * padding;
             (y, height)
         })
         .collect()
@@ -1579,32 +1556,22 @@ mod tests {
 
     #[test]
     fn test_accordion_frames() {
-        // 3 windows, focused=1 (middle), viewport=900, padding=30
+        // 3 windows, padding=30, viewport=900: height = 900 - 2*30 = 840
         let frames = accordion_frames(3, 1, 900, 30);
-        // e0 (above focused, first): top=0, bottom=2*30=60 -> (0, 840)
         assert_eq!(frames[0], (0, 840));
-        // e1 (focused, middle): top=30, bottom=30 -> (30, 840)
         assert_eq!(frames[1], (30, 840));
-        // e2 (below focused, last): top=2*30=60, bottom=0 -> (60, 840)
         assert_eq!(frames[2], (60, 840));
 
-        // 3 windows, focused=0 (first)
-        let frames = accordion_frames(3, 0, 900, 30);
-        // e0 (focused, first): top=0, bottom=30 -> (0, 870)
-        assert_eq!(frames[0], (0, 870));
-        // e1 (directly below focused): top=60, bottom=30 -> (60, 810)
-        assert_eq!(frames[1], (60, 810));
-        // e2 (last): top=30, bottom=0 -> (30, 870)
-        assert_eq!(frames[2], (30, 870));
+        // Focus index doesn't change geometry (only z-order matters)
+        let frames2 = accordion_frames(3, 0, 900, 30);
+        assert_eq!(frames, frames2);
 
-        // 2 windows, focused=1 (last)
+        // 2 windows, padding=30, viewport=600: height = 600 - 30 = 570
         let frames = accordion_frames(2, 1, 600, 30);
-        // e0 (directly above focused, first): top=0, bottom=60 -> (0, 540)
-        assert_eq!(frames[0], (0, 540));
-        // e1 (focused, last): top=30, bottom=0 -> (30, 570)
+        assert_eq!(frames[0], (0, 570));
         assert_eq!(frames[1], (30, 570));
 
-        // Single item
+        // Single item: full viewport
         let frames = accordion_frames(1, 0, 900, 30);
         assert_eq!(frames[0], (0, 900));
     }
@@ -1625,7 +1592,7 @@ mod tests {
         // Stack e1 onto e0, then set accordion mode
         strip.stack(entities[1]).unwrap();
         if let Some(col) = strip.get_column_mut(0) {
-            if let Column::Stack(_, ref mut mode) = col {
+            if let Column::Stack(_, mode) = col {
                 *mode = StackMode::Accordion;
             }
         }
@@ -1633,8 +1600,8 @@ mod tests {
         let get_window_frame = |_| Some(IRect::new(0, 0, 300, 300));
         let padding = 30;
 
-        // e0 is focused (first of 2): top=0, bottom=30 -> (0, 470)
-        // e1 (below focused, last): top=60, bottom=0 -> (60, 440)
+        // 2 windows, viewport=500, padding=30: both get height=470
+        // Frames are the same regardless of which is focused (z-order handles it)
         let out: Vec<_> = strip
             .relative_positions(500, &get_window_frame, Some(entities[0]), padding)
             .collect();
@@ -1642,33 +1609,27 @@ mod tests {
         let e0_frame = out.iter().find(|(e, _)| *e == entities[0]).unwrap().1;
         let e1_frame = out.iter().find(|(e, _)| *e == entities[1]).unwrap().1;
         assert_eq!(e0_frame.min.y, 0);
-        assert_eq!(e0_frame.height(), 470); // 500 - 30
-        assert_eq!(e1_frame.min.y, 60);     // 2 * padding (directly below focused)
-        assert_eq!(e1_frame.height(), 440); // 500 - 60
+        assert_eq!(e0_frame.height(), 470);
+        assert_eq!(e1_frame.min.y, 30);
+        assert_eq!(e1_frame.height(), 470);
 
-        // e1 is focused (last of 2):
-        // e0 (above focused, first): top=0, bottom=60 -> (0, 440)
-        // e1 (focused, last): top=30, bottom=0 -> (30, 470)
-        let out: Vec<_> = strip
+        // Switching focus doesn't change frame geometry
+        let out2: Vec<_> = strip
             .relative_positions(500, &get_window_frame, Some(entities[1]), padding)
             .collect();
-        let e0_frame = out.iter().find(|(e, _)| *e == entities[0]).unwrap().1;
-        let e1_frame = out.iter().find(|(e, _)| *e == entities[1]).unwrap().1;
-        assert_eq!(e0_frame.min.y, 0);
-        assert_eq!(e0_frame.height(), 440); // 500 - 60
-        assert_eq!(e1_frame.min.y, 30);
-        assert_eq!(e1_frame.height(), 470); // 500 - 30
+        let e0_frame2 = out2.iter().find(|(e, _)| *e == entities[0]).unwrap().1;
+        let e1_frame2 = out2.iter().find(|(e, _)| *e == entities[1]).unwrap().1;
+        assert_eq!(e0_frame, e0_frame2);
+        assert_eq!(e1_frame, e1_frame2);
 
-        // Focus in another column (e2): first item in accordion expands (focused_index=0)
-        let out: Vec<_> = strip
+        // Focus in another column: same frames
+        let out3: Vec<_> = strip
             .relative_positions(500, &get_window_frame, Some(entities[2]), padding)
             .collect();
-        let e0_frame = out.iter().find(|(e, _)| *e == entities[0]).unwrap().1;
-        let e1_frame = out.iter().find(|(e, _)| *e == entities[1]).unwrap().1;
-        assert_eq!(e0_frame.min.y, 0);
-        assert_eq!(e0_frame.height(), 470);
-        assert_eq!(e1_frame.min.y, 60);
-        assert_eq!(e1_frame.height(), 440);
+        let e0_frame3 = out3.iter().find(|(e, _)| *e == entities[0]).unwrap().1;
+        let e1_frame3 = out3.iter().find(|(e, _)| *e == entities[1]).unwrap().1;
+        assert_eq!(e0_frame, e0_frame3);
+        assert_eq!(e1_frame, e1_frame3);
     }
 
     /// Stacking two windows, toggling accordion, and cycling focus produces
@@ -1699,34 +1660,32 @@ mod tests {
         assert_eq!(h0 + h1, viewport);
 
         // Toggle to accordion
-        if let Some(Column::Stack(_, ref mut mode)) = strip.get_column_mut(0) {
+        if let Some(Column::Stack(_, mode)) = strip.get_column_mut(0) {
             *mode = StackMode::Accordion;
         }
 
-        // e0 focused: both windows are nearly full-sized, overlapping
+        // 2 windows, viewport=600, padding=30: both get height=570
         let out: Vec<_> = strip
             .relative_positions(viewport, &get_window_frame, Some(entities[0]), padding)
             .collect();
         let f0 = out.iter().find(|(e, _)| *e == entities[0]).unwrap().1;
         let f1 = out.iter().find(|(e, _)| *e == entities[1]).unwrap().1;
-        // Focused (first): top=0, bottom=padding -> height=570
+        assert_eq!(f0.min.y, 0);
         assert_eq!(f0.height(), viewport - padding);
-        // Below focused (last): top=2*padding, bottom=0 -> height=540
-        assert!(f1.height() > viewport / 2, "non-focused should be nearly full-sized");
+        assert_eq!(f1.min.y, padding);
+        assert_eq!(f1.height(), viewport - padding);
 
-        // Switch focus to e1: e1 is now the focused window
+        // Focus doesn't change geometry
         let out: Vec<_> = strip
             .relative_positions(viewport, &get_window_frame, Some(entities[1]), padding)
             .collect();
-        let f0 = out.iter().find(|(e, _)| *e == entities[0]).unwrap().1;
-        let f1 = out.iter().find(|(e, _)| *e == entities[1]).unwrap().1;
-        // e0 above focused (first): top=0, bottom=2*padding
-        // e1 focused (last): top=padding, bottom=0
-        assert_eq!(f1.height(), viewport - padding);
-        assert!(f0.height() > viewport / 2);
+        let f0b = out.iter().find(|(e, _)| *e == entities[0]).unwrap().1;
+        let f1b = out.iter().find(|(e, _)| *e == entities[1]).unwrap().1;
+        assert_eq!(f0, f0b);
+        assert_eq!(f1, f1b);
 
         // Toggle back to Split
-        if let Some(Column::Stack(_, ref mut mode)) = strip.get_column_mut(0) {
+        if let Some(Column::Stack(_, mode)) = strip.get_column_mut(0) {
             *mode = StackMode::Split;
         }
         let out: Vec<_> = strip
@@ -1737,7 +1696,7 @@ mod tests {
         assert_eq!(h0 + h1, viewport, "back to Split, heights sum to viewport");
 
         // Unstack from accordion mode: should work cleanly
-        if let Some(Column::Stack(_, ref mut mode)) = strip.get_column_mut(0) {
+        if let Some(Column::Stack(_, mode)) = strip.get_column_mut(0) {
             *mode = StackMode::Accordion;
         }
         strip.unstack(entities[1]).unwrap();
@@ -1764,7 +1723,7 @@ mod tests {
         strip.stack(entities[1]).unwrap();
         strip.stack(entities[2]).unwrap();
 
-        if let Some(Column::Stack(_, ref mut mode)) = strip.get_column_mut(0) {
+        if let Some(Column::Stack(_, mode)) = strip.get_column_mut(0) {
             *mode = StackMode::Accordion;
         }
 
@@ -1782,15 +1741,13 @@ mod tests {
             .map(|e| out.iter().find(|(ent, _)| ent == e).unwrap().1)
             .collect();
 
-        // e0 (directly above focused, first): top=0, bottom=2*padding=50 -> (0, 750)
+        // 3 windows, viewport=800, padding=25: all get height = 800 - 2*25 = 750
         assert_eq!(frames[0].min.y, 0);
         assert_eq!(frames[0].height(), viewport - 2 * padding); // 750
 
-        // e1 (focused, middle): top=padding=25, bottom=padding=25 -> (25, 750)
         assert_eq!(frames[1].min.y, padding);
         assert_eq!(frames[1].height(), viewport - 2 * padding); // 750
 
-        // e2 (directly below focused, last): top=2*padding=50, bottom=0 -> (50, 750)
         assert_eq!(frames[2].min.y, 2 * padding);
         assert_eq!(frames[2].height(), viewport - 2 * padding); // 750
 
