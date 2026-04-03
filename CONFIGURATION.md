@@ -30,6 +30,7 @@ General behavior settings for the window manager.
 | `window_hidden_ratio` | Float (0.0–1.0) | `0.0` | How much of a window can be hidden before it's forced into view on focus change. `0.0` = eager, `1.0` = lazy. |
 | `window_resize_cycle` | Boolean | `true` | If disabled, `window_resize` and `window_shrink` stop at the largest/smallest preset instead of cycling back. |
 | `mouse_resize_modifier` | String | *None* | If enabled allows window resizing using mouse movement. For example `cmd + shift` will allow resizing of the window when holding those keys. Proximity of the pointer to left or right window edge determines which side will be adjusted. |
+| `accordion_sliver_height` | Integer (px) | `30` | Height in pixels of collapsed windows in accordion mode. |
 
 ---
 
@@ -119,6 +120,7 @@ Format: `"[modifiers-]key"`. Available modifiers are:
 | `window_stack` | Stack the current window into the column on the left. |
 | `window_unstack` | Pull a window out of a stack into its own column. |
 | `window_equalize` | Make all windows in a stack equal height. |
+| `window_accordion` | Toggle accordion mode on the focused stack column. |
 | `window_nextdisplay` | Move focused window to the next monitor and follow it. |
 | `window_nextdisplaysend` | Move focused window to the next monitor but stay on current. |
 | `mouse_nextdisplay` | Warp mouse cursor to the next monitor. |

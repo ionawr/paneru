@@ -245,6 +245,7 @@ fn parse_operation(argv: &[&str]) -> Result<Operation> {
             parse_virtual_workspace_number(argv.get(1).ok_or(err)?)?,
             MoveFocus::Stay,
         ),
+        "accordion" => Operation::ToggleAccordion,
         _ => {
             return Err(err);
         }
@@ -426,6 +427,10 @@ impl Config {
 
     pub fn sliver_width(&self) -> i32 {
         i32::from(self.options().sliver_width.unwrap_or(5)).max(1)
+    }
+
+    pub fn accordion_sliver_height(&self) -> i32 {
+        i32::from(self.options().accordion_sliver_height.unwrap_or(30)).max(1)
     }
 
     pub fn edge_padding(&self) -> (i32, i32, i32, i32) {
@@ -943,6 +948,10 @@ pub struct MainOptions {
     /// Whether grow/shrink cycles back when reaching the end of presets.
     /// Default: true (cycles). Set to false to stop at the limits.
     pub window_resize_cycle: Option<bool>,
+
+    /// Height in pixels of non-focused windows in accordion mode.
+    /// Default: 30 pixels.
+    pub accordion_sliver_height: Option<u16>,
 }
 
 /// Returns a default set of column widths.

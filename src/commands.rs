@@ -12,7 +12,7 @@ use tracing::{debug, info};
 mod query;
 
 use crate::config::Config;
-use crate::ecs::layout::{Column, LayoutStrip, StackItem};
+use crate::ecs::layout::{Column, LayoutStrip, StackItem, StackMode};
 use crate::ecs::params::{ActiveDisplay, ActiveDisplayMut, Windows};
 use crate::ecs::{
     ActiveDisplayMarker, ActiveWorkspaceMarker, Bounds, FocusedMarker, FullWidthMarker,
@@ -94,6 +94,8 @@ pub enum Operation {
     VirtualMove(Direction, MoveFocus),
     /// Moves the focused window to a virtual strip by its zero-based index.
     VirtualMoveNumber(u32, MoveFocus),
+    /// Toggles the focused stack column between Split and Accordion mode.
+    ToggleAccordion,
 }
 
 /// Defines operations that can be performed on the mouse.
@@ -135,6 +137,7 @@ pub fn register_commands(app: &mut bevy::app::App) {
             command_move_focus,
             command_swap_focus,
             snap_window,
+            toggle_accordion_handler,
         ),
     );
 }
@@ -185,7 +188,7 @@ fn get_window_in_direction(
 
         Direction::North => match strip.get(index).ok()? {
             Column::Single(_) | Column::Tabs(_) | Column::Fullscren(_) => None,
-            Column::Stack(stack) => stack
+            Column::Stack(stack, _) => stack
                 .iter()
                 .enumerate()
                 .find(|(_, item)| item.contains(entity))
@@ -195,7 +198,7 @@ fn get_window_in_direction(
 
         Direction::South => match strip.get(index).ok()? {
             Column::Single(_) | Column::Tabs(_) | Column::Fullscren(_) => None,
-            Column::Stack(stack) => stack
+            Column::Stack(stack, _) => stack
                 .iter()
                 .enumerate()
                 .find(|(_, item)| item.contains(entity))
@@ -515,7 +518,7 @@ fn resize_window(
 
     // Resize all windows in the column so stacked siblings share the new width.
     let strip = active_display.active_strip();
-    if let Some(Column::Stack(stack)) = strip
+    if let Some(Column::Stack(stack, _)) = strip
         .index_of(entity)
         .ok()
         .and_then(|idx| strip.get(idx).ok())
@@ -835,7 +838,10 @@ fn equalize_column(
         return;
     };
 
-    if let Column::Stack(stack) = column {
+    if let Column::Stack(stack, mode) = column {
+        if mode == StackMode::Accordion {
+            return;
+        }
         #[allow(clippy::cast_precision_loss)]
         let equal_height = active_display.bounds().height() / i32::try_from(stack.len()).unwrap();
 
@@ -936,6 +942,45 @@ pub fn stack_windows_handler(
         if was_full_width {
             reshuffle_around(entity, &mut commands);
         }
+    }
+}
+
+#[instrument(level = Level::DEBUG, skip_all)]
+#[allow(clippy::needless_pass_by_value)]
+fn toggle_accordion_handler(
+    mut messages: MessageReader<Event>,
+    windows: Windows,
+    mut active_display: ActiveDisplayMut,
+) {
+    if filter_window_operations(&mut messages, |op| {
+        matches!(op, Operation::ToggleAccordion)
+    })
+    .next()
+    .is_none()
+    {
+        return;
+    }
+
+    let Some((_, entity, unmanaged)) = windows
+        .focused()
+        .and_then(|(_, entity)| windows.get_managed(entity))
+    else {
+        return;
+    };
+    if unmanaged.is_some() {
+        return;
+    }
+
+    let strip = active_display.active_strip();
+    let Ok(index) = strip.index_of(entity) else {
+        return;
+    };
+
+    if let Some(Column::Stack(_, mode)) = strip.get_column_mut(index) {
+        *mode = match *mode {
+            StackMode::Split => StackMode::Accordion,
+            StackMode::Accordion => StackMode::Split,
+        };
     }
 }
 
