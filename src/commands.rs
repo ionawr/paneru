@@ -337,7 +337,10 @@ fn command_swap_focus(
             active_strip.len()
         );
 
-        if index < new_index {
+        if index == new_index {
+            // Both windows are in the same stack: swap items within the column.
+            active_strip.swap_in_stack(current, other_window);
+        } else if index < new_index {
             (index..new_index).for_each(|idx| active_strip.swap(idx, idx + 1));
         } else {
             (new_index..index)

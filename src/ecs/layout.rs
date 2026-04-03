@@ -344,6 +344,25 @@ impl LayoutStrip {
         self.columns.swap(left, right);
     }
 
+    /// Swaps two `StackItem`s within the same stack column.
+    /// Returns `true` if the swap occurred, `false` if the entities are not in the same stack.
+    pub fn swap_in_stack(&mut self, a: Entity, b: Entity) -> bool {
+        let Some(col_idx) = self.index_of(a).ok() else {
+            return false;
+        };
+        let Some(Column::Stack(items, _)) = self.columns.get_mut(col_idx) else {
+            return false;
+        };
+        let pos_a = items.iter().position(|item| item.contains(a));
+        let pos_b = items.iter().position(|item| item.contains(b));
+        if let (Some(pa), Some(pb)) = (pos_a, pos_b) {
+            items.swap(pa, pb);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Returns the number of panels in the pane.
     ///
     /// # Returns
@@ -1059,6 +1078,35 @@ mod tests {
         strip.swap(0, 2);
         assert_eq!(strip.index_of(entities[2]).unwrap(), 0);
         assert_eq!(strip.index_of(entities[0]).unwrap(), 2);
+    }
+
+    #[test]
+    fn test_swap_in_stack() {
+        let (_world, mut strip, entities) = setup_world_and_strip();
+        strip.stack(entities[1]).unwrap();
+
+        // Before: [e0, e1] in stack at column 0, e2 at column 1
+        match strip.get(0).unwrap() {
+            Column::Stack(stack, _) => {
+                assert_eq!(stack[0], StackItem::Single(entities[0]));
+                assert_eq!(stack[1], StackItem::Single(entities[1]));
+            }
+            _ => panic!("expected stack"),
+        }
+
+        // Swap e0 and e1 within the stack
+        assert!(strip.swap_in_stack(entities[0], entities[1]));
+
+        match strip.get(0).unwrap() {
+            Column::Stack(stack, _) => {
+                assert_eq!(stack[0], StackItem::Single(entities[1]));
+                assert_eq!(stack[1], StackItem::Single(entities[0]));
+            }
+            _ => panic!("expected stack"),
+        }
+
+        // Swap with entity not in stack returns false
+        assert!(!strip.swap_in_stack(entities[0], entities[2]));
     }
 
     #[test]
