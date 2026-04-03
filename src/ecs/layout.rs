@@ -71,8 +71,9 @@ pub enum Column {
     /// A panel containing a single window, identified by its `Entity`.
     Single(Entity),
     /// A panel containing a stack of items (windows or tabs), ordered from top to bottom,
-    /// with a `StackMode` controlling how they are sized vertically.
-    Stack(Vec<StackItem>, StackMode),
+    /// with a `StackMode` controlling how they are sized vertically. The `Option<Entity>`
+    /// tracks the last-focused window so accordion mode can restore it when focus returns.
+    Stack(Vec<StackItem>, StackMode, Option<Entity>),
     /// A panel containing a group of native tabs, with the active "Leader" at the front.
     Tabs(Vec<Entity>),
     Fullscren(Entity),
@@ -85,16 +86,18 @@ impl Column {
     pub fn top(&self) -> Option<Entity> {
         match self {
             Column::Single(id) | Column::Fullscren(id) => Some(*id),
-            Column::Stack(stack, _) => stack.first().and_then(StackItem::top),
+            Column::Stack(stack, _, _) => stack.first().and_then(StackItem::top),
             Column::Tabs(tabs) => tabs.first().copied(),
         }
     }
 
     /// Returns the entity at the given index, or the last entity if the index exceeds the size.
+    /// For accordion stacks with a remembered last-focused window, returns that instead.
     pub fn at_or_last(&self, index: usize) -> Option<Entity> {
         match self {
             Column::Single(id) | Column::Fullscren(id) => Some(*id),
-            Column::Stack(stack, _) => stack
+            Column::Stack(_, StackMode::Accordion, Some(last_focused)) => Some(*last_focused),
+            Column::Stack(stack, _, _) => stack
                 .get(index)
                 .or_else(|| stack.last())
                 .and_then(StackItem::top),
@@ -106,7 +109,8 @@ impl Column {
     pub fn position_of(&self, entity: Entity) -> Option<usize> {
         match self {
             Column::Single(id) | Column::Fullscren(id) => (*id == entity).then_some(0),
-            Column::Stack(stack, _) => stack.iter().position(|item| item.contains(entity)),
+            Column::Single(id) => (*id == entity).then_some(0),
+            Column::Stack(stack, _, _) => stack.iter().position(|item| item.contains(entity)),
             Column::Tabs(tabs) => tabs.contains(&entity).then_some(0),
         }
     }
@@ -116,7 +120,8 @@ impl Column {
     pub fn move_to_front(&mut self, entity: Entity) {
         match self {
             Column::Single(_) | Column::Fullscren(_) => {}
-            Column::Stack(stack, _) => {
+            Column::Stack(stack, _, last_focused) => {
+                *last_focused = Some(entity);
                 if let Some(StackItem::Tabs(tabs)) =
                     stack.iter_mut().find(|item| item.contains(entity))
                     && let Some(pos) = tabs.iter().position(|&e| e == entity)
@@ -176,7 +181,7 @@ impl LayoutStrip {
             .iter()
             .position(|column| match column {
                 Column::Single(id) | Column::Fullscren(id) => *id == entity,
-                Column::Stack(stack, _) => stack.iter().any(|item| item.contains(entity)),
+                Column::Stack(stack, _, _) => stack.iter().any(|item| item.contains(entity)),
                 Column::Tabs(stack) => stack.contains(&entity),
             })
             .ok_or(Error::NotFound(format!(
@@ -227,7 +232,7 @@ impl LayoutStrip {
             Column::Single(id) | Column::Fullscren(id) => {
                 self.columns.insert(index, Column::Tabs(vec![id, follower]));
             }
-            Column::Stack(mut items, mode) => {
+            Column::Stack(mut items, mode, last_focused) => {
                 if let Some(pos) = items.iter().position(|item| item.contains(leader)) {
                     match &mut items[pos] {
                         StackItem::Single(id) => {
@@ -241,7 +246,7 @@ impl LayoutStrip {
                         }
                     }
                 }
-                self.columns.insert(index, Column::Stack(items, mode));
+                self.columns.insert(index, Column::Stack(items, mode, last_focused));
             }
             Column::Tabs(mut tabs) => {
                 if !tabs.contains(&follower) {
@@ -274,7 +279,8 @@ impl LayoutStrip {
                 Column::Single(id) => {
                     self.columns.insert(index, Column::Single(id));
                 }
-                Column::Stack(mut stack, mode) => {
+                Column::Stack(mut stack, mode, last_focused) => {
+                    let last_focused = last_focused.filter(|e| *e != entity);
                     for item in &mut stack {
                         match item {
                             StackItem::Single(_) => {}
@@ -288,7 +294,7 @@ impl LayoutStrip {
                         StackItem::Tabs(tabs) => !tabs.is_empty(),
                     });
                     if stack.len() > 1 {
-                        self.columns.insert(index, Column::Stack(stack, mode));
+                        self.columns.insert(index, Column::Stack(stack, mode, last_focused));
                     } else if let Some(remaining_item) = stack.first() {
                         match remaining_item {
                             StackItem::Single(id) => {
@@ -347,7 +353,7 @@ impl LayoutStrip {
         let Some(col_idx) = self.index_of(a).ok() else {
             return false;
         };
-        let Some(Column::Stack(items, _)) = self.columns.get_mut(col_idx) else {
+        let Some(Column::Stack(items, _, _)) = self.columns.get_mut(col_idx) else {
             return false;
         };
         let pos_a = items.iter().position(|item| item.contains(a));
@@ -433,19 +439,19 @@ impl LayoutStrip {
             Column::Fullscren(_) => return Ok(()),
             Column::Single(id) => vec![StackItem::Single(id)],
             Column::Tabs(tabs) => vec![StackItem::Tabs(tabs)],
-            Column::Stack(items, _) => items,
+            Column::Stack(items, _, _) => items,
         };
 
         let target_column = self.columns.remove(index - 1).unwrap();
         let new_column = match target_column {
             Column::Fullscren(_) => return Ok(()),
             Column::Single(id) => {
-                Column::Stack([vec![StackItem::Single(id)], items_to_stack].concat(), StackMode::default())
+                Column::Stack([vec![StackItem::Single(id)], items_to_stack].concat(), StackMode::default(), None)
             }
             Column::Tabs(tabs) => {
-                Column::Stack([vec![StackItem::Tabs(tabs)], items_to_stack].concat(), StackMode::default())
+                Column::Stack([vec![StackItem::Tabs(tabs)], items_to_stack].concat(), StackMode::default(), None)
             }
-            Column::Stack(items, mode) => Column::Stack([items, items_to_stack].concat(), mode),
+            Column::Stack(items, mode, last_focused) => Column::Stack([items, items_to_stack].concat(), mode, last_focused),
         };
 
         self.columns.insert(index - 1, new_column);
@@ -466,7 +472,8 @@ impl LayoutStrip {
         let index = self.index_of(entity)?;
         let column = self.columns.remove(index).unwrap();
 
-        if let Column::Stack(mut items, mode) = column {
+        if let Column::Stack(mut items, mode, last_focused) = column {
+            let last_focused = last_focused.filter(|e| *e != entity);
             let item_index = items
                 .iter()
                 .position(|item| item.contains(entity))
@@ -489,7 +496,7 @@ impl LayoutStrip {
                         StackItem::Tabs(tabs) => Column::Tabs(tabs),
                     }
                 } else {
-                    Column::Stack(items, mode)
+                    Column::Stack(items, mode, last_focused)
                 };
                 self.columns.insert(index, new_column);
             }
@@ -512,7 +519,7 @@ impl LayoutStrip {
             .iter()
             .flat_map(|column| match column {
                 Column::Single(entity) | Column::Fullscren(entity) => vec![*entity],
-                Column::Stack(items, _) => items.iter().flat_map(StackItem::all_windows).collect(),
+                Column::Stack(items, _, _) => items.iter().flat_map(StackItem::all_windows).collect(),
                 Column::Tabs(ids) => ids.clone(),
             })
             .collect()
@@ -545,13 +552,13 @@ impl LayoutStrip {
 
         self.column_positions(get_window_frame)
             .filter_map(move |(column, position)| {
-                let (items, stack_mode): (Vec<StackItem>, StackMode) = match column {
+                let (items, stack_mode, last_focused_in_stack): (Vec<StackItem>, StackMode, Option<Entity>) = match column {
                     Column::Single(entity) | Column::Fullscren(entity) => {
-                        (vec![StackItem::Single(*entity)], StackMode::Split)
+                        (vec![StackItem::Single(*entity)], StackMode::Split, None)
                     }
-                    Column::Stack(stack, mode) => (stack.clone(), *mode),
+                    Column::Stack(stack, mode, last_focused) => (stack.clone(), *mode, *last_focused),
                     Column::Tabs(tabs) => {
-                        (vec![StackItem::Tabs(tabs.clone())], StackMode::Split)
+                        (vec![StackItem::Tabs(tabs.clone())], StackMode::Split, None)
                     }
                 };
 
@@ -563,6 +570,7 @@ impl LayoutStrip {
                 let frames = if stack_mode == StackMode::Accordion && items.len() > 1 {
                     let focused_index = focused_entity
                         .and_then(|fe| items.iter().position(|item| item.contains(fe)))
+                        .or_else(|| last_focused_in_stack.and_then(|lf| items.iter().position(|item| item.contains(lf))))
                         .unwrap_or(0);
                     let acc_frames = accordion_frames(
                         items.len(),
@@ -658,7 +666,7 @@ impl LayoutStrip {
         let column = self.get(index).ok()?;
         match column {
             Column::Single(_) | Column::Tabs(_) | Column::Fullscren(_) => None,
-            Column::Stack(items, _) => {
+            Column::Stack(items, _, _) => {
                 let pos = items.iter().position(|item| item.contains(entity))?;
                 (pos > 0).then(|| items[pos - 1].top()).flatten()
             }
@@ -670,7 +678,7 @@ impl LayoutStrip {
             .and_then(|idx| self.get(idx))
             .map(|col| match col {
                 Column::Tabs(tabs) => tabs.contains(&entity),
-                Column::Stack(items, _) => items.iter().any(|item| {
+                Column::Stack(items, _, _) => items.iter().any(|item| {
                     if let StackItem::Tabs(tabs) = item {
                         tabs.contains(&entity)
                     } else {
@@ -1099,7 +1107,7 @@ mod tests {
 
         // Before: [e0, e1] in stack at column 0, e2 at column 1
         match strip.get(0).unwrap() {
-            Column::Stack(stack, _) => {
+            Column::Stack(stack, _, _) => {
                 assert_eq!(stack[0], StackItem::Single(entities[0]));
                 assert_eq!(stack[1], StackItem::Single(entities[1]));
             }
@@ -1110,7 +1118,7 @@ mod tests {
         assert!(strip.swap_in_stack(entities[0], entities[1]));
 
         match strip.get(0).unwrap() {
-            Column::Stack(stack, _) => {
+            Column::Stack(stack, _, _) => {
                 assert_eq!(stack[0], StackItem::Single(entities[1]));
                 assert_eq!(stack[1], StackItem::Single(entities[0]));
             }
@@ -1133,7 +1141,7 @@ mod tests {
 
         // Check internal structure
         match strip.get(0).unwrap() {
-            Column::Stack(stack, _) => {
+            Column::Stack(stack, _, _) => {
                 assert_eq!(stack.len(), 2);
                 assert_eq!(stack[0], StackItem::Single(entities[0]));
                 assert_eq!(stack[1], StackItem::Single(entities[1]));
@@ -1319,7 +1327,7 @@ mod tests {
 
         assert_eq!(strip.len(), 2);
         match strip.get(0).unwrap() {
-            Column::Stack(items, _) => {
+            Column::Stack(items, _, _) => {
                 assert_eq!(items.len(), 2);
                 match &items[0] {
                     StackItem::Tabs(tabs) => assert_eq!(tabs, &vec![e1, e4]),
@@ -1652,7 +1660,7 @@ mod tests {
         // Stack e1 onto e0, then set accordion mode
         strip.stack(entities[1]).unwrap();
         if let Some(col) = strip.get_column_mut(0) {
-            if let Column::Stack(_, mode) = col {
+            if let Column::Stack(_, mode, _) = col {
                 *mode = StackMode::Accordion;
             }
         }
@@ -1720,7 +1728,7 @@ mod tests {
         assert_eq!(h0 + h1, viewport);
 
         // Toggle to accordion
-        if let Some(Column::Stack(_, mode)) = strip.get_column_mut(0) {
+        if let Some(Column::Stack(_, mode, _)) = strip.get_column_mut(0) {
             *mode = StackMode::Accordion;
         }
 
@@ -1745,7 +1753,7 @@ mod tests {
         assert_eq!(f1, f1b);
 
         // Toggle back to Split
-        if let Some(Column::Stack(_, mode)) = strip.get_column_mut(0) {
+        if let Some(Column::Stack(_, mode, _)) = strip.get_column_mut(0) {
             *mode = StackMode::Split;
         }
         let out: Vec<_> = strip
@@ -1756,7 +1764,7 @@ mod tests {
         assert_eq!(h0 + h1, viewport, "back to Split, heights sum to viewport");
 
         // Unstack from accordion mode: should work cleanly
-        if let Some(Column::Stack(_, mode)) = strip.get_column_mut(0) {
+        if let Some(Column::Stack(_, mode, _)) = strip.get_column_mut(0) {
             *mode = StackMode::Accordion;
         }
         strip.unstack(entities[1]).unwrap();
@@ -1783,7 +1791,7 @@ mod tests {
         strip.stack(entities[1]).unwrap();
         strip.stack(entities[2]).unwrap();
 
-        if let Some(Column::Stack(_, mode)) = strip.get_column_mut(0) {
+        if let Some(Column::Stack(_, mode, _)) = strip.get_column_mut(0) {
             *mode = StackMode::Accordion;
         }
 
