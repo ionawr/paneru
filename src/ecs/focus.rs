@@ -15,7 +15,7 @@ use tracing::{Level, debug, error, instrument, trace, warn};
 use super::{FocusedMarker, MouseHeldMarker, SystemTheme};
 use crate::config::Config;
 use crate::ecs::layout::LayoutStrip;
-use crate::ecs::params::{ActiveDisplay, GlobalState, Windows};
+use crate::ecs::params::{ActiveDisplay, ActiveDisplayMut, Configuration, GlobalState, Windows};
 use crate::ecs::{
     ActiveWorkspaceMarker, Scrolling, SelectedVirtualMarker, SendMessageTrigger, StrayFocusEvent,
     focus_entity, reposition_entity, reshuffle_around,
@@ -59,6 +59,8 @@ fn maintain_focus_singleton(
     trigger: On<Add, FocusedMarker>,
     windows: Query<(Entity, Has<FocusedMarker>), With<Window>>,
     mut config: GlobalState,
+    mut active_display: ActiveDisplayMut,
+    mut config: Configuration,
     mut commands: Commands,
 ) {
     let focused_entity = trigger.event().entity;
@@ -71,6 +73,15 @@ fn maintain_focus_singleton(
             debug!("window {entity} lost focus.");
             entity_commands.try_remove::<FocusedMarker>();
         }
+    }
+
+    // Update last_focused on the column so accordion mode can
+    // restore the correct focused_index when focus returns.
+    let strip = active_display.active_strip();
+    if let Ok(index) = strip.index_of(focused_entity)
+        && let Some(column) = strip.get_column_mut(index)
+    {
+        column.move_to_front(focused_entity);
     }
 
     // Check if the reshuffle was caused by a keyboard switch or mouse move.
