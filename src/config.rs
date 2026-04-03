@@ -196,6 +196,7 @@ fn parse_operation(argv: &[&str]) -> Result<Operation> {
         "virtualsend" => {
             Operation::VirtualMove(parse_direction(argv.get(1).ok_or(err)?)?, MoveFocus::Stay)
         }
+        "accordion" => Operation::ToggleAccordion,
         _ => {
             return Err(err);
         }
@@ -377,6 +378,10 @@ impl Config {
 
     pub fn sliver_width(&self) -> i32 {
         i32::from(self.options().sliver_width.unwrap_or(5)).max(1)
+    }
+
+    pub fn accordion_sliver_height(&self) -> i32 {
+        i32::from(self.options().accordion_sliver_height.unwrap_or(30)).max(1)
     }
 
     pub fn edge_padding(&self) -> (i32, i32, i32, i32) {
@@ -840,6 +845,9 @@ pub struct MainOptions {
     /// view. 0.0 (default) = always bring into view. 1.0 = never move unless
     /// fully invisible. E.g. 0.5 = tolerate up to 50% hidden.
     pub window_hidden_ratio: Option<f64>,
+    /// Height in pixels of non-focused windows in accordion mode.
+    /// Default: 30 pixels.
+    pub accordion_sliver_height: Option<u16>,
 }
 
 /// Returns a default set of column widths.
