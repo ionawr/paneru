@@ -181,7 +181,7 @@ fn get_window_in_direction(
 
         Direction::North => match strip.get(index).ok()? {
             Column::Single(_) | Column::Tabs(_) | Column::Fullscren(_) => None,
-            Column::Stack(stack, _) => stack
+            Column::Stack(stack, _, _) => stack
                 .iter()
                 .enumerate()
                 .find(|(_, item)| item.contains(entity))
@@ -191,7 +191,7 @@ fn get_window_in_direction(
 
         Direction::South => match strip.get(index).ok()? {
             Column::Single(_) | Column::Tabs(_) | Column::Fullscren(_) => None,
-            Column::Stack(stack, _) => stack
+            Column::Stack(stack, _, _) => stack
                 .iter()
                 .enumerate()
                 .find(|(_, item)| item.contains(entity))
@@ -508,7 +508,7 @@ fn resize_window(
 
     // Resize all windows in the column so stacked siblings share the new width.
     let strip = active_display.active_strip();
-    if let Some(Column::Stack(stack, _)) = strip
+    if let Some(Column::Stack(stack, _, _)) = strip
         .index_of(entity)
         .ok()
         .and_then(|idx| strip.get(idx).ok())
@@ -822,7 +822,7 @@ fn equalize_column(
         return;
     };
 
-    if let Column::Stack(stack, mode) = column {
+    if let Column::Stack(stack, mode, _) = column {
         if mode == StackMode::Accordion {
             return;
         }
@@ -946,7 +946,7 @@ fn toggle_accordion_handler(
         return;
     };
 
-    if let Some(Column::Stack(_, mode)) = strip.get_column_mut(index) {
+    if let Some(Column::Stack(_, mode, _)) = strip.get_column_mut(index) {
         *mode = match *mode {
             StackMode::Split => StackMode::Accordion,
             StackMode::Accordion => StackMode::Split,
