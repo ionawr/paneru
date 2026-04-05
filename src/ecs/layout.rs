@@ -109,7 +109,6 @@ impl Column {
     pub fn position_of(&self, entity: Entity) -> Option<usize> {
         match self {
             Column::Single(id) | Column::Fullscren(id) => (*id == entity).then_some(0),
-            Column::Single(id) => (*id == entity).then_some(0),
             Column::Stack(stack, _, _) => stack.iter().position(|item| item.contains(entity)),
             Column::Tabs(tabs) => tabs.contains(&entity).then_some(0),
         }
@@ -194,7 +193,7 @@ impl LayoutStrip {
     pub fn contains(&self, entity: Entity) -> bool {
         self.columns.iter().any(|column| match column {
             Column::Single(id) | Column::Fullscren(id) => *id == entity,
-            Column::Stack(stack) => stack.iter().any(|item| item.contains(entity)),
+            Column::Stack(stack, ..) => stack.iter().any(|item| item.contains(entity)),
             Column::Tabs(stack) => stack.contains(&entity),
         })
     }
@@ -246,7 +245,8 @@ impl LayoutStrip {
                         }
                     }
                 }
-                self.columns.insert(index, Column::Stack(items, mode, last_focused));
+                self.columns
+                    .insert(index, Column::Stack(items, mode, last_focused));
             }
             Column::Tabs(mut tabs) => {
                 if !tabs.contains(&follower) {
@@ -276,9 +276,6 @@ impl LayoutStrip {
                 Column::Single(_) | Column::Fullscren(_) => {
                     // Already removed from self.columns.
                 }
-                Column::Single(id) => {
-                    self.columns.insert(index, Column::Single(id));
-                }
                 Column::Stack(mut stack, mode, last_focused) => {
                     let last_focused = last_focused.filter(|e| *e != entity);
                     for item in &mut stack {
@@ -294,7 +291,8 @@ impl LayoutStrip {
                         StackItem::Tabs(tabs) => !tabs.is_empty(),
                     });
                     if stack.len() > 1 {
-                        self.columns.insert(index, Column::Stack(stack, mode, last_focused));
+                        self.columns
+                            .insert(index, Column::Stack(stack, mode, last_focused));
                     } else if let Some(remaining_item) = stack.first() {
                         match remaining_item {
                             StackItem::Single(id) => {
@@ -445,13 +443,19 @@ impl LayoutStrip {
         let target_column = self.columns.remove(index - 1).unwrap();
         let new_column = match target_column {
             Column::Fullscren(_) => return Ok(()),
-            Column::Single(id) => {
-                Column::Stack([vec![StackItem::Single(id)], items_to_stack].concat(), StackMode::default(), None)
+            Column::Single(id) => Column::Stack(
+                [vec![StackItem::Single(id)], items_to_stack].concat(),
+                StackMode::default(),
+                None,
+            ),
+            Column::Tabs(tabs) => Column::Stack(
+                [vec![StackItem::Tabs(tabs)], items_to_stack].concat(),
+                StackMode::default(),
+                None,
+            ),
+            Column::Stack(items, mode, last_focused) => {
+                Column::Stack([items, items_to_stack].concat(), mode, last_focused)
             }
-            Column::Tabs(tabs) => {
-                Column::Stack([vec![StackItem::Tabs(tabs)], items_to_stack].concat(), StackMode::default(), None)
-            }
-            Column::Stack(items, mode, last_focused) => Column::Stack([items, items_to_stack].concat(), mode, last_focused),
         };
 
         self.columns.insert(index - 1, new_column);
@@ -519,7 +523,9 @@ impl LayoutStrip {
             .iter()
             .flat_map(|column| match column {
                 Column::Single(entity) | Column::Fullscren(entity) => vec![*entity],
-                Column::Stack(items, _, _) => items.iter().flat_map(StackItem::all_windows).collect(),
+                Column::Stack(items, _, _) => {
+                    items.iter().flat_map(StackItem::all_windows).collect()
+                }
                 Column::Tabs(ids) => ids.clone(),
             })
             .collect()
@@ -552,11 +558,17 @@ impl LayoutStrip {
 
         self.column_positions(get_window_frame)
             .filter_map(move |(column, position)| {
-                let (items, stack_mode, last_focused_in_stack): (Vec<StackItem>, StackMode, Option<Entity>) = match column {
+                let (items, stack_mode, last_focused_in_stack): (
+                    Vec<StackItem>,
+                    StackMode,
+                    Option<Entity>,
+                ) = match column {
                     Column::Single(entity) | Column::Fullscren(entity) => {
                         (vec![StackItem::Single(*entity)], StackMode::Split, None)
                     }
-                    Column::Stack(stack, mode, last_focused) => (stack.clone(), *mode, *last_focused),
+                    Column::Stack(stack, mode, last_focused) => {
+                        (stack.clone(), *mode, *last_focused)
+                    }
                     Column::Tabs(tabs) => {
                         (vec![StackItem::Tabs(tabs.clone())], StackMode::Split, None)
                     }
@@ -570,7 +582,10 @@ impl LayoutStrip {
                 let frames = if stack_mode == StackMode::Accordion && items.len() > 1 {
                     let focused_index = focused_entity
                         .and_then(|fe| items.iter().position(|item| item.contains(fe)))
-                        .or_else(|| last_focused_in_stack.and_then(|lf| items.iter().position(|item| item.contains(lf))))
+                        .or_else(|| {
+                            last_focused_in_stack
+                                .and_then(|lf| items.iter().position(|item| item.contains(lf)))
+                        })
                         .unwrap_or(0);
                     let acc_frames = accordion_frames(
                         items.len(),
@@ -1002,37 +1017,17 @@ pub(super) fn position_layout_windows(
             frame.min += strip_position;
             frame.max += strip_position;
 
-        if frame.max.x <= viewport.min.x + h_pad {
-            // Window hidden to the left — position so exactly
-            // sliver_width CG pixels are visible from the real
-            // display edge.  The +h_pad accounts for the gap that
-            // reposition() adds, which can leave a window just
-            // inside the viewport edge while its CG frame is fully
-            // past it.
-            frame.min.x = viewport.min.x - width + offscreen_sliver_width - pad_left + h_pad;
-        } else if frame.min.x >= viewport.max.x - h_pad {
-            // Window hidden to the right — mirror of above.
-            frame.min.x = viewport.max.x - offscreen_sliver_width + pad_right - h_pad;
-        }
-        frame.max.x = frame.min.x + width;
-
-        // During swipe, keep full height.
-        if !swiping {
-            let stacked = layout_strip
-                .index_of(entity)
-                .ok()
-                .and_then(|idx| layout_strip.get(idx).ok())
-                .is_some_and(|col| matches!(col, Column::Stack(..)));
-
-            // Don't compress stacked windows vertically when off-screen.
-            // The height reduction corrupts their proportions: when the
-            // column scrolls back on-screen, binpack_heights makes the
-            // last window absorb all remaining space.
-            if !stacked {
-                let inset =
-                    (f64::from(viewport.height()) * (1.0 - config.sliver_height()) / 2.0) as i32;
-                frame.min.y += inset;
-                frame.max.y += inset;
+            if frame.max.x <= viewport.min.x + h_pad {
+                // Window hidden to the left — position so exactly
+                // sliver_width CG pixels are visible from the real
+                // display edge.  The +h_pad accounts for the gap that
+                // reposition() adds, which can leave a window just
+                // inside the viewport edge while its CG frame is fully
+                // past it.
+                frame.min.x = viewport.min.x - width + offscreen_sliver_width - pad_left + h_pad;
+            } else if frame.min.x >= viewport.max.x - h_pad {
+                // Window hidden to the right — mirror of above.
+                frame.min.x = viewport.max.x - offscreen_sliver_width + pad_right - h_pad;
             }
             frame.max.x = frame.min.x + width;
 
@@ -1042,7 +1037,7 @@ pub(super) fn position_layout_windows(
                     .index_of(entity)
                     .ok()
                     .and_then(|idx| layout_strip.get(idx).ok())
-                    .is_some_and(|col| matches!(col, Column::Stack(_)));
+                    .is_some_and(|col| matches!(col, Column::Stack(..)));
 
                 // Don't compress stacked windows vertically when off-screen.
                 // The height reduction corrupts their proportions: when the
@@ -1227,7 +1222,9 @@ mod tests {
         }
 
         let get_window_frame = |_| Some(IRect::new(0, 0, 300, 400));
-        let out: Vec<_> = strip.relative_positions(800, &get_window_frame, None, 30).collect();
+        let out: Vec<_> = strip
+            .relative_positions(800, &get_window_frame, None, 30)
+            .collect();
 
         assert_eq!(out.len(), 3);
         for (_, f) in &out {
@@ -1266,7 +1263,9 @@ mod tests {
             }
         };
 
-        let out: Vec<_> = strip.relative_positions(600, &get_window_frame, None, 30).collect();
+        let out: Vec<_> = strip
+            .relative_positions(600, &get_window_frame, None, 30)
+            .collect();
         assert_eq!(out.len(), 4);
 
         // All stacked windows use the top window's width (400).
@@ -1339,7 +1338,9 @@ mod tests {
 
         // relative_positions should yield e1, e4 (same frame) and e2
         let get_window_frame = |_| Some(IRect::new(0, 0, 100, 100));
-        let out: Vec<_> = strip.relative_positions(400, &get_window_frame, None, 30).collect();
+        let out: Vec<_> = strip
+            .relative_positions(400, &get_window_frame, None, 30)
+            .collect();
 
         // We expect e1, e4, e2 from the first column, and e3 from the second.
         assert_eq!(out.len(), 4);
@@ -1368,7 +1369,9 @@ mod tests {
         let get_window_frame = |_| Some(IRect::new(0, 0, 300, 250));
 
         // Before unstack: e0 and e1 share 500px height.
-        let out: Vec<_> = strip.relative_positions(500, &get_window_frame, None, 30).collect();
+        let out: Vec<_> = strip
+            .relative_positions(500, &get_window_frame, None, 30)
+            .collect();
         let e1_height = out
             .iter()
             .find(|(e, _)| *e == entities[1])
@@ -1381,7 +1384,9 @@ mod tests {
         strip.unstack(entities[1]).unwrap();
         assert_eq!(strip.len(), 3);
 
-        let out: Vec<_> = strip.relative_positions(500, &get_window_frame, None, 30).collect();
+        let out: Vec<_> = strip
+            .relative_positions(500, &get_window_frame, None, 30)
+            .collect();
         for (_, f) in &out {
             assert_eq!(
                 f.height(),
@@ -1405,21 +1410,27 @@ mod tests {
 
         // Stack: [Stack(e0, e1)]
         strip.stack(entities[1]).unwrap();
-        let out: Vec<_> = strip.relative_positions(500, &get_window_frame, None, 30).collect();
+        let out: Vec<_> = strip
+            .relative_positions(500, &get_window_frame, None, 30)
+            .collect();
         let heights: Vec<_> = out.iter().map(|(_, f)| f.height()).collect();
         assert_eq!(heights.iter().sum::<i32>(), 500);
         assert_eq!(heights.len(), 2);
 
         // Unstack: [Single(e0), Single(e1)]
         strip.unstack(entities[1]).unwrap();
-        let out: Vec<_> = strip.relative_positions(500, &get_window_frame, None, 30).collect();
+        let out: Vec<_> = strip
+            .relative_positions(500, &get_window_frame, None, 30)
+            .collect();
         for (_, f) in &out {
             assert_eq!(f.height(), 500);
         }
 
         // Re-stack: [Stack(e0, e1)] — e1 stacks onto left neighbor e0
         strip.stack(entities[1]).unwrap();
-        let out: Vec<_> = strip.relative_positions(500, &get_window_frame, None, 30).collect();
+        let out: Vec<_> = strip
+            .relative_positions(500, &get_window_frame, None, 30)
+            .collect();
         let heights: Vec<_> = out.iter().map(|(_, f)| f.height()).collect();
         assert_eq!(heights.iter().sum::<i32>(), 500);
         assert_eq!(heights.len(), 2);
@@ -1458,7 +1469,9 @@ mod tests {
             }
         };
 
-        let out: Vec<_> = strip.relative_positions(600, &get_window_frame, None, 30).collect();
+        let out: Vec<_> = strip
+            .relative_positions(600, &get_window_frame, None, 30)
+            .collect();
         assert_eq!(out.len(), 3);
 
         // Columns must be edge-to-edge: each column starts where the previous ends.
@@ -1494,7 +1507,9 @@ mod tests {
 
         let get_window_frame = |_| Some(IRect::new(0, 0, 300, 600));
 
-        let out: Vec<_> = strip.relative_positions(600, &get_window_frame, None, 30).collect();
+        let out: Vec<_> = strip
+            .relative_positions(600, &get_window_frame, None, 30)
+            .collect();
         let xs: Vec<_> = out.iter().map(|(_, f)| f.min.x).collect();
         assert_eq!(xs, vec![0, 300, 600]);
 
@@ -1723,8 +1738,18 @@ mod tests {
         let out: Vec<_> = strip
             .relative_positions(viewport, &get_window_frame, Some(entities[0]), padding)
             .collect();
-        let h0 = out.iter().find(|(e, _)| *e == entities[0]).unwrap().1.height();
-        let h1 = out.iter().find(|(e, _)| *e == entities[1]).unwrap().1.height();
+        let h0 = out
+            .iter()
+            .find(|(e, _)| *e == entities[0])
+            .unwrap()
+            .1
+            .height();
+        let h1 = out
+            .iter()
+            .find(|(e, _)| *e == entities[1])
+            .unwrap()
+            .1
+            .height();
         assert_eq!(h0 + h1, viewport);
 
         // Toggle to accordion
@@ -1759,8 +1784,18 @@ mod tests {
         let out: Vec<_> = strip
             .relative_positions(viewport, &get_window_frame, Some(entities[0]), padding)
             .collect();
-        let h0 = out.iter().find(|(e, _)| *e == entities[0]).unwrap().1.height();
-        let h1 = out.iter().find(|(e, _)| *e == entities[1]).unwrap().1.height();
+        let h0 = out
+            .iter()
+            .find(|(e, _)| *e == entities[0])
+            .unwrap()
+            .1
+            .height();
+        let h1 = out
+            .iter()
+            .find(|(e, _)| *e == entities[1])
+            .unwrap()
+            .1
+            .height();
         assert_eq!(h0 + h1, viewport, "back to Split, heights sum to viewport");
 
         // Unstack from accordion mode: should work cleanly
@@ -1821,7 +1856,10 @@ mod tests {
 
         // All windows are nearly full-sized (no tiny slivers)
         for f in &frames {
-            assert!(f.height() > viewport / 2, "all windows should be large, not tiny slivers");
+            assert!(
+                f.height() > viewport / 2,
+                "all windows should be large, not tiny slivers"
+            );
         }
     }
 }
