@@ -106,7 +106,7 @@ impl PaneruState {
                     Column::Single(entity) => {
                         SavedWindow::from_entity(*entity, windows, apps).map(SavedColumn::Single)
                     }
-                    Column::Stack(items, _) => {
+                    Column::Stack(items, ..) => {
                         let saved_items = items
                             .iter()
                             .filter_map(|item| match item {
