@@ -20,14 +20,14 @@ use super::{
     WMEventTrigger,
 };
 use crate::config::{Config, WindowParams};
-use crate::ecs::layout::LayoutStrip;
+use crate::ecs::layout::{Column, LayoutStrip, StackMode};
 use crate::ecs::params::{ActiveDisplay, ActiveDisplayMut, Configuration, Windows};
 use crate::ecs::state::PaneruState;
 use crate::ecs::workspace::PreviousStripPosition;
 use crate::ecs::{
-    ActiveWorkspaceMarker, Bounds, DockPosition, LayoutPosition, LocateDockTrigger, Position,
-    RestoreWindowState, Scrolling, SendMessageTrigger, WidthRatio, WindowProperties, focus_entity,
-    reposition_entity, reshuffle_around, resize_entity,
+    AccordionFocusGuard, ActiveWorkspaceMarker, Bounds, DockPosition, LayoutPosition,
+    LocateDockTrigger, Position, RestoreWindowState, Scrolling, SendMessageTrigger, WidthRatio,
+    WindowProperties, focus_entity, reposition_entity, reshuffle_around, resize_entity,
 };
 use crate::events::Event;
 use crate::manager::{
@@ -228,7 +228,7 @@ pub(super) fn theme_change_trigger(
 /// * `focus_follows_mouse_id` - The resource to track focus follows mouse window ID.
 /// * `skip_reshuffle` - The resource to indicate if reshuffling should be skipped.
 /// * `commands` - Bevy commands to manage components and trigger events.
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 #[instrument(level = Level::DEBUG, skip_all)]
 pub(super) fn window_focused_trigger(
     trigger: On<WMEventTrigger>,
@@ -236,6 +236,7 @@ pub(super) fn window_focused_trigger(
     windows: Windows,
     mut active_display: ActiveDisplayMut,
     config: Configuration,
+    accordion_guard: Res<AccordionFocusGuard>,
     mut commands: Commands,
 ) {
     const STRAY_FOCUS_RETRY_SEC: u64 = 2;
@@ -278,6 +279,28 @@ pub(super) fn window_focused_trigger(
     }
     if app.focused_window_id().is_ok_and(|id| id != window_id) {
         return;
+    }
+
+    // Skip stale macOS focus events for accordion windows after a
+    // keyboard-initiated focus change. macOS echoes back a focus event
+    // for the previously focused window, which would revert the accordion
+    // layout to the wrong focused_index.
+    {
+        const ACCORDION_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(500);
+        let strip = active_display.active_strip();
+        let in_accordion = strip
+            .index_of(entity)
+            .ok()
+            .and_then(|idx| strip.get(idx).ok())
+            .is_some_and(|col| matches!(col, Column::Stack(_, StackMode::Accordion, _)));
+        if in_accordion
+            && accordion_guard
+                .0
+                .is_some_and(|t| t.elapsed() < ACCORDION_DEBOUNCE)
+            && windows.focused().is_some_and(|(_, fe)| fe != entity)
+        {
+            return;
+        }
     }
 
     // Handle tab switching: if the focused window is a tab, make it the leader.

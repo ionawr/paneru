@@ -434,7 +434,10 @@ impl WindowApi for WindowOS {
                     position.as_ref(),
                 )
             };
-            self.frame.max = self.frame.min + size;
+            // Don't update self.frame optimistically. Let update_frame()
+            // read the actual macOS frame after the resize is applied.
+            // Optimistic updates cause paneru to stop retrying when macOS
+            // hasn't actually applied the size change yet.
         }
         self.reenable_enhanced_ui();
     }

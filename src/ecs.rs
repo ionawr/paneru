@@ -123,7 +123,7 @@ pub fn register_systems(app: &mut bevy::app::App) {
             // Wait for finish_setup before tiling: until then every window
             // sits in the active strip regardless of its real display.
             (
-                layout::layout_sizes_changed,
+                layout::layout_sizes_changed.after(systems::window_update_frame),
                 (
                     layout::layout_strip_changed,
                     layout::reshuffle_layout_strip,
@@ -152,7 +152,9 @@ pub fn register_systems(app: &mut bevy::app::App) {
         (
             (
                 systems::animate_entities,
-                systems::commit_window_position.run_if(not(resource_exists::<Initializing>)),
+                systems::commit_window_position
+                    .after(systems::commit_window_size)
+                    .run_if(not(resource_exists::<Initializing>)),
             )
                 .chain(),
             (
@@ -412,6 +414,12 @@ pub struct SystemTheme {
 #[derive(Resource)]
 pub struct SkipReshuffle(pub bool);
 
+/// Guard to debounce stale macOS focus events after a keyboard-initiated
+/// focus change within an accordion stack. Set by `command_move_focus`,
+/// checked by `window_focused_trigger`.
+#[derive(Resource, Default)]
+pub struct AccordionFocusGuard(pub Option<std::time::Instant>);
+
 /// Component marking a deferred reshuffle while the mouse button is held down.
 /// Spawned with a `Timeout` so it auto-despawns if the mouse-up event is lost.
 #[derive(Component)]
@@ -496,6 +504,7 @@ pub fn setup_bevy_app(sender: EventSender, receiver: Receiver<Event>) -> Result<
         .insert_resource(Time::<Virtual>::from_max_delta(Duration::from_secs(10)))
         .insert_resource(WindowManager(window_manager))
         .insert_resource(SkipReshuffle(false))
+        .insert_resource(AccordionFocusGuard::default())
         .insert_resource(SystemTheme {
             is_dark: crate::util::is_dark_mode(),
         })
