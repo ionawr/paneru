@@ -1674,12 +1674,21 @@ mod tests {
 
     #[test]
     fn test_accordion_frames() {
+        let viewport = 900;
+        let padding = 30;
+
         // 3 windows, focused=1 (middle): slivers above and below
         // height = 900 - 2*30 = 840
-        let frames = accordion_frames(3, 1, 900, 30);
+        let frames = accordion_frames(3, 1, viewport, padding);
         assert_eq!(frames[0], (0, 840));
         assert_eq!(frames[1], (30, 840));
         assert_eq!(frames[2], (60, 840));
+
+        // Verify sliver sizes: top and bottom slivers are each `padding` px
+        let focused_top = frames[1].0;
+        let focused_bottom = frames[1].0 + frames[1].1;
+        assert_eq!(focused_top, padding, "top sliver");
+        assert_eq!(viewport - focused_bottom, padding, "bottom sliver");
 
         // 3 windows, focused=0 (first): only bottom sliver
         // height = 900 - 30 = 870
