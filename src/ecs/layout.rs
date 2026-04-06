@@ -603,21 +603,15 @@ impl LayoutStrip {
                     items
                         .into_iter()
                         .zip(acc_frames)
-                        .filter_map(|(item, (y_offset, height))| {
+                        .flat_map(|(item, (y_offset, height))| {
                             let frame = IRect::new(
                                 position,
                                 y_offset,
                                 position + column_width,
                                 y_offset + height,
                             );
-                            let results = item
-                                .all_windows()
-                                .into_iter()
-                                .map(|e| (e, frame))
-                                .collect::<Vec<_>>();
-                            Some(results)
+                            item.all_windows().into_iter().map(move |e| (e, frame))
                         })
-                        .flatten()
                         .collect::<Vec<_>>()
                 } else {
                     let current_heights = items
