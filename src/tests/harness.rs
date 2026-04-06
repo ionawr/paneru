@@ -10,8 +10,8 @@ use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 use crate::commands::register_commands;
 use crate::config::Config;
 use crate::ecs::{
-    BProcess, ExistingMarker, FocusFollowsMouse, FocusedMarker, Initializing, MissionControlActive,
-    PollForNotifications, SkipReshuffle, register_systems, register_triggers,
+    AccordionFocusGuard, BProcess, ExistingMarker, FocusFollowsMouse, FocusedMarker, Initializing,
+    MissionControlActive, PollForNotifications, SkipReshuffle, register_systems, register_triggers,
 };
 use crate::events::Event;
 use crate::manager::{Application, Origin, Size, Window, WindowManager, WindowManagerApi};
@@ -123,6 +123,7 @@ pub(crate) fn setup_world() -> App {
         .init_resource::<bevy::ecs::message::Messages<Event>>()
         .insert_resource(PollForNotifications)
         .insert_resource(SkipReshuffle(false))
+        .insert_resource(AccordionFocusGuard::default())
         .insert_resource(MissionControlActive(false))
         .insert_resource(FocusFollowsMouse(None))
         .insert_resource(Config::default())

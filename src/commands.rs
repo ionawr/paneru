@@ -13,9 +13,10 @@ use crate::config::Config;
 use crate::ecs::layout::{Column, LayoutStrip, StackItem, StackMode};
 use crate::ecs::params::{ActiveDisplay, ActiveDisplayMut, Windows};
 use crate::ecs::{
-    ActiveDisplayMarker, ActiveWorkspaceMarker, FocusFollowsMouse, FocusedMarker, FullWidthMarker,
-    NativeFullscreenMarker, SelectedVirtualMarker, SendMessageTrigger, Unmanaged, WMEventTrigger,
-    focus_entity, reposition_entity, reshuffle_around, resize_entity,
+    AccordionFocusGuard, ActiveDisplayMarker, ActiveWorkspaceMarker, FocusFollowsMouse,
+    FocusedMarker, FullWidthMarker, NativeFullscreenMarker, SelectedVirtualMarker,
+    SendMessageTrigger, Unmanaged, WMEventTrigger, focus_entity, reposition_entity,
+    reshuffle_around, resize_entity,
 };
 use crate::events::Event;
 use crate::manager::{Application, Display, Origin, Size, Window, WindowManager, origin_to};
@@ -211,6 +212,7 @@ fn command_move_focus(
     workspaces: Query<(&LayoutStrip, Option<&NativeFullscreenMarker>)>,
     active_display: ActiveDisplay,
     mut commands: Commands,
+    mut accordion_guard: ResMut<AccordionFocusGuard>,
 ) {
     let Some(Operation::Focus(direction)) =
         filter_window_operations(&mut messages, |op| matches!(op, Operation::Focus(_))).next()
@@ -255,6 +257,16 @@ fn command_move_focus(
         });
 
     if let Some(entity) = candidate {
+        // Set debounce guard if focusing within an accordion stack.
+        let in_accordion = active_strip
+            .index_of(entity)
+            .ok()
+            .and_then(|idx| active_strip.get(idx).ok())
+            .is_some_and(|col| matches!(col, Column::Stack(_, StackMode::Accordion, _)));
+        if in_accordion {
+            accordion_guard.0 = Some(std::time::Instant::now());
+        }
+
         focus_entity(entity, true, &mut commands);
         // Explicitly reshuffle so the target window is brought into view.
         // This avoids a race where focus-follows-mouse leaves skip_reshuffle
