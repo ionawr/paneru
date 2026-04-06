@@ -943,7 +943,7 @@ pub(super) fn reshuffle_layout_strip(
                 cmd.try_remove::<ReshuffleAroundMarker>();
             }
         });
-        let Some((_, strip_entity, active_strip, child)) =
+        let Some((layout_strip, strip_entity, active_strip, child)) =
             strips.into_iter().find(|strip| strip.0.contains(entity))
         else {
             return;
@@ -965,7 +965,20 @@ pub(super) fn reshuffle_layout_strip(
             .clamp(display_bounds.min, display_bounds.max - size);
         frame.max = frame.min + size;
 
-        let strip_position = frame.min - layout_position.0;
+        let mut strip_position = frame.min - layout_position.0;
+
+        // Accordion windows have varying layout-y values. Using a
+        // not-yet-repositioned frame would compute a bogus vertical
+        // offset and shift the entire strip. Preserve the strip's
+        // current y position for accordion stacks.
+        let in_accordion = layout_strip
+            .index_of(entity)
+            .ok()
+            .and_then(|idx| layout_strip.get(idx).ok())
+            .is_some_and(|col| matches!(col, Column::Stack(_, StackMode::Accordion, _)));
+        if in_accordion {
+            strip_position.y = active_strip.0.y;
+        }
 
         // Check how much of the window is hidden. Slivers don't count as
         // meaningfully visible, so subtract sliver_width from the visible
