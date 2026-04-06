@@ -1,4 +1,4 @@
-use bevy::ecs::change_detection::DetectChangesMut as _;
+use bevy::ecs::change_detection::{DetectChanges as _, DetectChangesMut as _};
 use bevy::ecs::component::Component;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::hierarchy::ChildOf;
@@ -7,7 +7,7 @@ use bevy::ecs::system::{ParallelCommands, Populated, Query, Res};
 use bevy::math::IRect;
 use std::collections::VecDeque;
 use stdext::function_name;
-use tracing::{Level, instrument, trace};
+use tracing::{Level, debug, instrument, trace};
 
 use crate::config::Config;
 use crate::ecs::FocusedMarker;
@@ -587,6 +587,13 @@ impl LayoutStrip {
                                 .and_then(|lf| items.iter().position(|item| item.contains(lf)))
                         })
                         .unwrap_or(0);
+                    debug!(
+                        "accordion: count={}, focused_index={}, height={}, padding={}",
+                        items.len(),
+                        focused_index,
+                        layout_strip_height,
+                        accordion_sliver_height,
+                    );
                     let acc_frames = accordion_frames(
                         items.len(),
                         focused_index,
@@ -808,13 +815,23 @@ fn accordion_frames(
 #[allow(clippy::needless_pass_by_value)]
 #[instrument(level = Level::DEBUG, skip_all)]
 pub(super) fn layout_sizes_changed(
-    changed_sizes: Populated<Entity, Changed<Bounds>>,
-    windows: Query<(&Position, &Bounds, &Window), Without<LayoutStrip>>,
-    mut layout_position: Query<&mut LayoutPosition, With<Window>>,
+    mut windows: Query<
+        (Entity, &Position, &mut Bounds, &Window, &mut LayoutPosition),
+        Without<LayoutStrip>,
+    >,
     active_display: ActiveDisplay,
     config: Res<Config>,
     focused: Query<Entity, With<FocusedMarker>>,
 ) {
+    let changed_entities: Vec<Entity> = windows
+        .iter_mut()
+        .filter_map(|(entity, _, bounds, _, _)| bounds.is_changed().then_some(entity))
+        .collect();
+
+    if changed_entities.is_empty() {
+        return;
+    }
+
     let viewport = active_display
         .display()
         .actual_display_bounds(active_display.dock(), &config);
@@ -823,11 +840,13 @@ pub(super) fn layout_sizes_changed(
     let get_window_frame = |entity| {
         windows
             .get(entity)
-            .map(|(position, bounds, _)| IRect::from_corners(position.0, position.0 + bounds.0))
+            .map(|(_, position, bounds, _, _)| {
+                IRect::from_corners(position.0, position.0 + bounds.0)
+            })
             .ok()
     };
 
-    changed_sizes
+    let updates: Vec<_> = changed_entities
         .into_iter()
         .filter_map(|entity| {
             layout_strip
@@ -841,11 +860,16 @@ pub(super) fn layout_sizes_changed(
                 ))
         })
         .flatten()
-        .for_each(|(entity, frame)| {
-            if let Ok(mut layout_position) = layout_position.get_mut(entity) {
-                layout_position.0 = frame.min;
+        .collect();
+
+    for (entity, frame) in updates {
+        if let Ok((_, _, mut bounds, _, mut layout_position)) = windows.get_mut(entity) {
+            layout_position.0 = frame.min;
+            if bounds.0 != frame.size() {
+                bounds.0 = frame.size();
             }
-        });
+        }
+    }
 }
 
 /// Watches for changes to `LayoutStrip` (i.e. a window added or window order changed) and
