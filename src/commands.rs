@@ -270,12 +270,12 @@ fn command_move_focus(
             .other()
             .filter(|d| d.bounds().min.y < active_y)
             .max_by_key(|d| d.bounds().min.y)
-            .map(|d| d.id()),
+            .map(crate::manager::Display::id),
         Direction::South => active_display
             .other()
             .filter(|d| d.bounds().min.y > active_y)
             .min_by_key(|d| d.bounds().min.y)
-            .map(|d| d.id()),
+            .map(crate::manager::Display::id),
         _ => None,
     };
     if let Some(id) = target_id {
@@ -324,15 +324,19 @@ fn command_swap_focus(
             active_strip.len()
         );
 
-        if index == new_index {
-            // Both windows are in the same stack: swap items within the column.
-            active_strip.swap_in_stack(current, other_window);
-        } else if index < new_index {
-            (index..new_index).for_each(|idx| active_strip.swap(idx, idx + 1));
-        } else {
-            (new_index..index)
-                .rev()
-                .for_each(|idx| active_strip.swap(idx, idx + 1));
+        match index.cmp(&new_index) {
+            std::cmp::Ordering::Equal => {
+                // Both windows are in the same stack: swap items within the column.
+                active_strip.swap_in_stack(current, other_window);
+            }
+            std::cmp::Ordering::Less => {
+                (index..new_index).for_each(|idx| active_strip.swap(idx, idx + 1));
+            }
+            std::cmp::Ordering::Greater => {
+                (new_index..index)
+                    .rev()
+                    .for_each(|idx| active_strip.swap(idx, idx + 1));
+            }
         }
         Some(current)
     };
@@ -896,11 +900,9 @@ fn toggle_accordion_handler(
     windows: Windows,
     mut active_display: ActiveDisplayMut,
 ) {
-    if filter_window_operations(&mut messages, |op| {
-        matches!(op, Operation::ToggleAccordion)
-    })
-    .next()
-    .is_none()
+    if filter_window_operations(&mut messages, |op| matches!(op, Operation::ToggleAccordion))
+        .next()
+        .is_none()
     {
         return;
     }
