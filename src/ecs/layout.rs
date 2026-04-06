@@ -1,23 +1,24 @@
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::change_detection::{DetectChanges as _, DetectChangesMut as _};
 use bevy::ecs::component::Component;
-use bevy::ecs::entity::Entity;
+use bevy::ecs::entity::{Entity, EntityHashSet};
 use bevy::ecs::hierarchy::ChildOf;
 use bevy::ecs::query::{Changed, Has, Or, With, Without};
 use bevy::ecs::schedule::IntoScheduleConfigs as _;
 use bevy::ecs::schedule::common_conditions::{not, resource_exists};
 use bevy::ecs::system::{ParallelCommands, Populated, Query, Res};
+use bevy::ecs::system::{Commands, ParallelCommands, Populated, Query, Res};
 use bevy::math::IRect;
 use std::collections::VecDeque;
 use stdext::function_name;
-use tracing::{Level, debug, instrument, trace};
+use tracing::{Level, instrument, trace};
 
 use crate::config::Config;
 use crate::ecs::FocusedMarker;
 use crate::ecs::params::{ActiveDisplay, Windows};
 use crate::ecs::{
     Bounds, DockPosition, FullWidthMarker, Initializing, LayoutPosition, Position,
-    ReshuffleAroundMarker, Scrolling, reposition_entity,
+    ReshuffleAroundMarker, ResizeMarker, Scrolling, reposition_entity,
 };
 use crate::errors::{Error, Result};
 use crate::manager::{Display, Window};
@@ -621,13 +622,6 @@ impl LayoutStrip {
                                 .and_then(|lf| items.iter().position(|item| item.contains(lf)))
                         })
                         .unwrap_or(0);
-                    debug!(
-                        "accordion: count={}, focused_index={}, height={}, padding={}",
-                        items.len(),
-                        focused_index,
-                        layout_strip_height,
-                        accordion_sliver_height,
-                    );
                     let acc_frames = accordion_frames(
                         items.len(),
                         focused_index,
@@ -882,6 +876,7 @@ fn layout_strip_changed(
     displays: Query<(&Display, Option<&DockPosition>)>,
     config: Res<Config>,
     focused: Query<Entity, With<FocusedMarker>>,
+    mut commands: Commands,
 ) {
     let get_window_frame = |entity| {
         windows
@@ -890,6 +885,7 @@ fn layout_strip_changed(
             .ok()
     };
 
+    let mut accordion_entities = EntityHashSet::default();
     let changed = changed_strips
         .into_iter()
         .filter_map(|(layout_strip, child_of)| {
@@ -897,7 +893,27 @@ fn layout_strip_changed(
                 .get(child_of.parent())
                 .map(|(display, dock)| {
                     let height = display.actual_display_bounds(dock, &config).height();
-                    layout_strip.relative_positions(height, &get_window_frame, focused.single().ok(), config.accordion_sliver_height())
+
+                    // Track which entities are in accordion stacks.
+                    for entity in layout_strip.all_windows() {
+                        if layout_strip
+                            .index_of(entity)
+                            .ok()
+                            .and_then(|idx| layout_strip.get(idx).ok())
+                            .is_some_and(|col| {
+                                matches!(col, Column::Stack(_, StackMode::Accordion, _))
+                            })
+                        {
+                            accordion_entities.insert(entity);
+                        }
+                    }
+
+                    layout_strip.relative_positions(
+                        height,
+                        &get_window_frame,
+                        focused.single().ok(),
+                        config.accordion_sliver_height(),
+                    )
                 })
                 .ok()
         })
@@ -914,6 +930,15 @@ fn layout_strip_changed(
             }
             if bounds.0 != frame.size() {
                 bounds.0 = frame.size();
+            }
+            // For accordion windows, insert a ResizeMarker with the
+            // correct target so the PostUpdate animation and commit
+            // systems apply the intended height instead of a stale
+            // target from the previous focus state.
+            if accordion_entities.contains(&entity)
+                && let Ok(mut cmd) = commands.get_entity(entity)
+            {
+                cmd.try_insert(ResizeMarker(frame.size()));
             }
         }
     }
@@ -1117,6 +1142,21 @@ fn position_layout_windows(
                         / 2.0) as i32;
                     frame.min.y += inset;
                     frame.max.y += inset;
+                }
+            }
+
+            // Clamp accordion frames to the viewport. Stale bounds from
+            // macOS callbacks can make windows extend past the display
+            // bottom, which is visible when a monitor sits below.
+            {
+                let in_acc = layout_strip
+                    .index_of(entity)
+                    .ok()
+                    .and_then(|idx| layout_strip.get(idx).ok())
+                    .is_some_and(|col| matches!(col, Column::Stack(_, StackMode::Accordion, _)));
+                if in_acc {
+                    frame.min.y = frame.min.y.max(viewport.min.y);
+                    frame.max.y = frame.max.y.min(viewport.max.y);
                 }
             }
 
