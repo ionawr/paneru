@@ -777,13 +777,13 @@ fn binpack_heights(heights: &[i32], min_height: i32, total_height: i32) -> Optio
     Some(output)
 }
 
-/// Computes (y_offset, height) pairs for accordion layout using AeroSpace-style
-/// overlapping. Each window is offset by `i * padding` from the top and shares
-/// the same height. The focused window is drawn on top via z-order, so only
-/// `padding`-pixel slivers of non-focused windows are visible, all uniformly sized.
+/// Computes (`y_offset`, height) pairs for accordion layout using AeroSpace-style
+/// overlapping. At most one sliver is visible above and one below the focused
+/// window. All other non-focused windows are hidden behind the nearest sliver.
+/// The focused window is drawn on top via z-order.
 fn accordion_frames(
     count: usize,
-    _focused_index: usize,
+    focused_index: usize,
     total_height: i32,
     padding: i32,
 ) -> Vec<(i32, i32)> {
@@ -794,13 +794,17 @@ fn accordion_frames(
         return vec![(0, total_height)];
     }
 
-    let n = i32::try_from(count).unwrap_or(1);
-    let height = (total_height - (n - 1) * padding).max(200);
+    let has_above = focused_index > 0;
+    let has_below = focused_index < count - 1;
+    let top_pad = if has_above { padding } else { 0 };
+    let bottom_pad = if has_below { padding } else { 0 };
+    let height = (total_height - top_pad - bottom_pad).max(200);
 
     (0..count)
-        .map(|i| {
-            let y = i32::try_from(i).unwrap_or(0) * padding;
-            (y, height)
+        .map(|i| match i.cmp(&focused_index) {
+            std::cmp::Ordering::Less => (0, height),
+            std::cmp::Ordering::Equal => (top_pad, height),
+            std::cmp::Ordering::Greater => (top_pad + bottom_pad, height),
         })
         .collect()
 }
@@ -1639,17 +1643,28 @@ mod tests {
 
     #[test]
     fn test_accordion_frames() {
-        // 3 windows, padding=30, viewport=900: height = 900 - 2*30 = 840
+        // 3 windows, focused=1 (middle): slivers above and below
+        // height = 900 - 2*30 = 840
         let frames = accordion_frames(3, 1, 900, 30);
         assert_eq!(frames[0], (0, 840));
         assert_eq!(frames[1], (30, 840));
         assert_eq!(frames[2], (60, 840));
 
-        // Focus index doesn't change geometry (only z-order matters)
-        let frames2 = accordion_frames(3, 0, 900, 30);
-        assert_eq!(frames, frames2);
+        // 3 windows, focused=0 (first): only bottom sliver
+        // height = 900 - 30 = 870
+        let frames = accordion_frames(3, 0, 900, 30);
+        assert_eq!(frames[0], (0, 870));
+        assert_eq!(frames[1], (30, 870));
+        assert_eq!(frames[2], (30, 870));
 
-        // 2 windows, padding=30, viewport=600: height = 600 - 30 = 570
+        // 3 windows, focused=2 (last): only top sliver
+        // height = 900 - 30 = 870
+        let frames = accordion_frames(3, 2, 900, 30);
+        assert_eq!(frames[0], (0, 870));
+        assert_eq!(frames[1], (0, 870));
+        assert_eq!(frames[2], (30, 870));
+
+        // 2 windows, focused=1, padding=30, viewport=600: height = 600 - 30 = 570
         let frames = accordion_frames(2, 1, 600, 30);
         assert_eq!(frames[0], (0, 570));
         assert_eq!(frames[1], (30, 570));
@@ -1684,7 +1699,8 @@ mod tests {
         let padding = 30;
 
         // 2 windows, viewport=500, padding=30: both get height=470
-        // Frames are the same regardless of which is focused (z-order handles it)
+        // With only 2 windows, there is always exactly one gap so geometry
+        // is the same regardless of which window is focused.
         let out: Vec<_> = strip
             .relative_positions(500, &get_window_frame, Some(entities[0]), padding)
             .collect();
@@ -1696,7 +1712,7 @@ mod tests {
         assert_eq!(e1_frame.min.y, 30);
         assert_eq!(e1_frame.height(), 470);
 
-        // Switching focus doesn't change frame geometry
+        // Switching focus in a 2-window stack produces the same frames
         let out2: Vec<_> = strip
             .relative_positions(500, &get_window_frame, Some(entities[1]), padding)
             .collect();
@@ -1705,7 +1721,7 @@ mod tests {
         assert_eq!(e0_frame, e0_frame2);
         assert_eq!(e1_frame, e1_frame2);
 
-        // Focus in another column: same frames
+        // Focus in another column: defaults to index 0, same frames
         let out3: Vec<_> = strip
             .relative_positions(500, &get_window_frame, Some(entities[2]), padding)
             .collect();
@@ -1768,7 +1784,7 @@ mod tests {
         assert_eq!(f1.min.y, padding);
         assert_eq!(f1.height(), viewport - padding);
 
-        // Focus doesn't change geometry
+        // Switching focus in a 2-window stack produces the same frames
         let out: Vec<_> = strip
             .relative_positions(viewport, &get_window_frame, Some(entities[1]), padding)
             .collect();
