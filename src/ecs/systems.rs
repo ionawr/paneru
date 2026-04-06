@@ -1071,7 +1071,7 @@ pub(crate) fn reposition_dragged_window(
 pub(super) fn update_overlays(
     windows: Windows,
     applications: Query<&Application>,
-    active_workspace: Query<(Has<Scrolling>, &LayoutStrip), With<ActiveWorkspaceMarker>>,
+    workspaces: Query<(Has<Scrolling>, &LayoutStrip)>,
     overlay_mgr: Option<NonSendMut<OverlayManager>>,
     config: Configuration,
 ) {
@@ -1085,13 +1085,18 @@ pub(super) fn update_overlays(
     let dim_opacity = config.config().dim_inactive_opacity();
     let border_enabled = config.config().border_active_window();
 
-    // Hide overlays during swipe, mission control, native fullscreen spaces,
-    // or briefly after a space change (macOS space-switch animation).
-    let Some((swiping, active_strip)) = active_workspace.iter().next() else {
+    // Hide overlays during swipe, mission control, or native fullscreen.
+    // Check the workspace that contains the focused window so borders
+    // render on all displays, not just the active one.
+    let focused_entity = windows.focused().map(|(_, e)| e);
+    let focused_workspace = focused_entity
+        .and_then(|entity| workspaces.iter().find(|(_, strip)| strip.contains(entity)));
+    let Some((swiping, focused_strip)) = focused_workspace else {
+        overlay_mgr.hide_all();
         return;
     };
 
-    if swiping || config.mission_control_active() || active_strip.is_fullscreen() {
+    if swiping || config.mission_control_active() || focused_strip.is_fullscreen() {
         overlay_mgr.hide_all();
         return;
     }
@@ -1100,6 +1105,8 @@ pub(super) fn update_overlays(
         overlay_mgr.remove_all();
         return;
     }
+
+    trace!("update_overlays: swiping={swiping}, border={border_enabled}");
 
     // Find the focused managed window's absolute CG frame.
     // Skip floating/unmanaged windows — no overlay or border for those.
@@ -1111,6 +1118,7 @@ pub(super) fn update_overlays(
             && !window.is_full_screen()
         {
             let frame = window.frame();
+            trace!("overlay focused: id={}, frame={:?}", window.id(), frame);
             let h_pad = window.horizontal_padding();
             let v_pad = window.vertical_padding();
             let focused_abs_cg = Some(NSRect::new(
