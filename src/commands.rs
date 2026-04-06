@@ -289,12 +289,12 @@ fn command_move_focus(
             .other()
             .filter(|d| d.bounds().min.y < active_y)
             .max_by_key(|d| d.bounds().min.y)
-            .map(|d| d.id()),
+            .map(crate::manager::Display::id),
         Direction::South => active_display
             .other()
             .filter(|d| d.bounds().min.y > active_y)
             .min_by_key(|d| d.bounds().min.y)
-            .map(|d| d.id()),
+            .map(crate::manager::Display::id),
         _ => None,
     };
     if let Some(id) = target_id {
@@ -952,11 +952,9 @@ fn toggle_accordion_handler(
     windows: Windows,
     mut active_display: ActiveDisplayMut,
 ) {
-    if filter_window_operations(&mut messages, |op| {
-        matches!(op, Operation::ToggleAccordion)
-    })
-    .next()
-    .is_none()
+    if filter_window_operations(&mut messages, |op| matches!(op, Operation::ToggleAccordion))
+        .next()
+        .is_none()
     {
         return;
     }
