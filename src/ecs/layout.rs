@@ -1,5 +1,5 @@
 use bevy::app::{App, Plugin, Update};
-use bevy::ecs::change_detection::DetectChangesMut as _;
+use bevy::ecs::change_detection::{DetectChanges as _, DetectChangesMut as _};
 use bevy::ecs::component::Component;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::hierarchy::ChildOf;
@@ -10,7 +10,7 @@ use bevy::ecs::system::{ParallelCommands, Populated, Query, Res};
 use bevy::math::IRect;
 use std::collections::VecDeque;
 use stdext::function_name;
-use tracing::{Level, instrument, trace};
+use tracing::{Level, debug, instrument, trace};
 
 use crate::config::Config;
 use crate::ecs::FocusedMarker;
@@ -621,6 +621,13 @@ impl LayoutStrip {
                                 .and_then(|lf| items.iter().position(|item| item.contains(lf)))
                         })
                         .unwrap_or(0);
+                    debug!(
+                        "accordion: count={}, focused_index={}, height={}, padding={}",
+                        items.len(),
+                        focused_index,
+                        layout_strip_height,
+                        accordion_sliver_height,
+                    );
                     let acc_frames = accordion_frames(
                         items.len(),
                         focused_index,
