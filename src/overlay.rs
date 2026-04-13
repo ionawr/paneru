@@ -252,8 +252,13 @@ impl OverlayManager {
                 DimParams::default(),
             ));
         }
-        // Remove extras if screens were disconnected.
-        self.overlays.truncate(screen_count);
+        // Remove extras if screens were disconnected, ordering them out
+        // before dropping so the window server removes them immediately.
+        while self.overlays.len() > screen_count {
+            if let Some((window, _)) = self.overlays.pop() {
+                window.orderOut(None::<&AnyObject>);
+            }
+        }
 
         for (i, screen) in screens.iter().enumerate() {
             let screen_frame = screen.frame(); // Cocoa coords for this screen
