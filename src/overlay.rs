@@ -245,12 +245,15 @@ impl OverlayManager {
         let screens = NSScreen::screens(self.mtm);
         let screen_count = screens.len();
 
-        // Ensure we have one overlay per screen.
+        // Ensure we have one overlay per screen. Mark as hidden so the
+        // per-screen loop below calls orderFront on all windows, including
+        // any that already existed.
         while self.overlays.len() < screen_count {
             self.overlays.push((
                 make_overlay_window(self.mtm, NSRect::ZERO),
                 DimParams::default(),
             ));
+            self.hidden = true;
         }
         // Remove extras if screens were disconnected, ordering them out
         // before dropping so the window server removes them immediately.
