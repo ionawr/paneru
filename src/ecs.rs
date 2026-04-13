@@ -175,7 +175,10 @@ pub fn register_systems(app: &mut bevy::app::App) {
             )
                 .chain(),
             focus::autocenter_window_on_focus.after(systems::animate_resize_entities),
-            focus::mouse_follows_focus.after(systems::animate_resize_entities),
+            focus::mouse_follows_focus
+                .after(systems::animate_resize_entities)
+                .after(focus::autocenter_window_on_focus),
+            focus::deferred_mouse_warp.after(systems::commit_window_position),
             focus::recover_lost_focus.run_if(on_timer(Duration::from_millis(
                 REFRESH_WINDOW_CHECK_FREQ_MS,
             ))),
@@ -424,6 +427,12 @@ pub struct AccordionFocusGuard(pub Option<std::time::Instant>);
 /// Spawned with a `Timeout` so it auto-despawns if the mouse-up event is lost.
 #[derive(Component)]
 pub struct MouseHeldMarker(pub Entity);
+
+/// Marker for a deferred mouse warp. Inserted when `mouse_follows_focus`
+/// skips a warp because the focused window is off-screen. A later system
+/// performs the warp once the window has been scrolled into view.
+#[derive(Component)]
+pub struct PendingMouseWarp;
 
 /// Resource indicating whether Mission Control is currently active.
 #[derive(PartialEq, Resource)]
