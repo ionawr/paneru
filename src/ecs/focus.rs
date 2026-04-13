@@ -2,11 +2,12 @@ use bevy::ecs::entity::Entity;
 use bevy::ecs::lifecycle::{Add, Remove};
 use bevy::ecs::observer::On;
 use bevy::ecs::query::{Added, Has, With};
-use bevy::ecs::system::{Commands, Query, Res, Single};
+use bevy::ecs::system::{Commands, Populated, Query, Res, Single};
+use bevy::math::{IRect, IVec2};
 use bevy::prelude::Event as BevyEvent;
 use tracing::{Level, debug, instrument, trace, warn};
 
-use super::{FocusedMarker, MouseHeldMarker, SystemTheme};
+use super::{FocusedMarker, MouseHeldMarker, PendingMouseWarp, RepositionMarker, SystemTheme};
 use crate::config::Config;
 use crate::ecs::layout::LayoutStrip;
 use crate::ecs::params::{ActiveDisplay, ActiveDisplayMut, Configuration, Windows};
@@ -92,9 +93,8 @@ pub(super) fn mouse_follows_focus(
     focused: Single<Entity, Added<FocusedMarker>>,
     windows: Windows,
     config: Configuration,
-    active_display: ActiveDisplay,
-    window_manager: Res<WindowManager>,
     active_workspace: Query<&Scrolling, With<ActiveWorkspaceMarker>>,
+    mut commands: Commands,
 ) {
     let entity = *focused;
     let Some(window) = windows.get(entity) else {
@@ -115,16 +115,75 @@ pub(super) fn mouse_follows_focus(
         config.skip_reshuffle(),
         config.ffm_flag()
     );
+    // Always defer: autocenter_window_on_focus calls reshuffle_around which
+    // may reposition the strip, so the window's final position is not known
+    // until the animation has finished. deferred_mouse_warp handles the
+    // actual warp once all RepositionMarkers have been consumed.
     if config.mouse_follows_focus()
         && !config.skip_reshuffle()
         && config.ffm_flag().is_none_or(|id| id != window.id())
-        && let Some(frame) = windows.moving_frame(entity)
     {
-        let display_bounds = active_display.bounds();
-        let visible = display_bounds.intersect(frame);
-        let origin = visible.center();
-        debug!("centering on {} {origin}", window.id());
-        window_manager.warp_mouse(origin);
+        debug!("deferring mouse warp for {}", window.id());
+        if let Ok(mut cmd) = commands.get_entity(entity) {
+            cmd.try_insert(PendingMouseWarp);
+        }
+    }
+}
+
+/// Returns the warp target for a window frame on the given display, or `None`
+/// if the window is not visible enough for a meaningful cursor placement.
+///
+/// When the window centre is inside the display the geometric centre is
+/// returned directly. Otherwise the centre of the visible intersection is
+/// used, provided the visible width is at least a third of the full window
+/// width (avoids warping to a thin sliver at the display edge).
+fn visible_warp_target(display: IRect, frame: IRect) -> Option<IVec2> {
+    let visible = display.intersect(frame);
+    if visible.height() <= 0 {
+        return None;
+    }
+    if display.contains(frame.center()) {
+        return Some(frame.center());
+    }
+    // Partly visible: require enough overlap to avoid edge-warping.
+    if visible.width() > frame.width() / 3 {
+        return Some(visible.center());
+    }
+    None
+}
+
+#[allow(clippy::needless_pass_by_value, clippy::type_complexity)]
+#[instrument(level = Level::TRACE, skip_all)]
+pub(super) fn deferred_mouse_warp(
+    pending: Populated<
+        (Entity, Has<RepositionMarker>),
+        (With<PendingMouseWarp>, With<FocusedMarker>),
+    >,
+    active_workspace: Query<Has<RepositionMarker>, With<ActiveWorkspaceMarker>>,
+    windows: Windows,
+    config: Configuration,
+    active_display: ActiveDisplay,
+    window_manager: Res<WindowManager>,
+    mut commands: Commands,
+) {
+    let strip_animating = active_workspace.iter().any(|animating| animating);
+
+    for (entity, window_animating) in pending.iter() {
+        if window_animating || strip_animating {
+            continue;
+        }
+        let Some(frame) = windows.moving_frame(entity) else {
+            continue;
+        };
+        if let Some(target) = visible_warp_target(active_display.bounds(), frame)
+            && config.mouse_follows_focus()
+        {
+            debug!("deferred warp to {target}");
+            window_manager.warp_mouse(target);
+            if let Ok(mut cmd) = commands.get_entity(entity) {
+                cmd.try_remove::<PendingMouseWarp>();
+            }
+        }
     }
 }
 
