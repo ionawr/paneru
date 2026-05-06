@@ -279,10 +279,8 @@ impl InputHandler {
         // still active causes the layout to drift. The ECS inertia system
         // handles post-gesture deceleration for intentional swipes instead.
         // Momentum phase: 0 = none (direct input / mouse wheel), non-zero = momentum.
-        let momentum_phase = CGEvent::integer_value_field(
-            Some(event),
-            CGEventField::ScrollWheelEventMomentumPhase,
-        );
+        let momentum_phase =
+            CGEvent::integer_value_field(Some(event), CGEventField::ScrollWheelEventMomentumPhase);
         if momentum_phase != 0 {
             return false;
         }
