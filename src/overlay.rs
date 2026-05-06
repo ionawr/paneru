@@ -185,7 +185,6 @@ fn primary_screen_height(mtm: MainThreadMarker) -> f64 {
     screens.objectAtIndex(0).frame().size.height
 }
 
-
 // ── Overlay window factory ──────────────────────────────────────────────
 
 fn make_overlay_window(mtm: MainThreadMarker, cocoa_frame: NSRect) -> Retained<NSWindow> {
