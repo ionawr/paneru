@@ -3,7 +3,7 @@ use bevy::ecs::entity::{Entity, EntityHashSet};
 use bevy::ecs::hierarchy::ChildOf;
 use bevy::ecs::message::MessageReader;
 use bevy::ecs::query::{Has, With, Without};
-use bevy::ecs::system::{Commands, Query, Res, Single};
+use bevy::ecs::system::{Commands, Query, Res, ResMut, Single};
 use bevy::math::IRect;
 use objc2_core_graphics::CGDirectDisplayID;
 use tracing::{Level, instrument};
@@ -15,10 +15,9 @@ use crate::config::Config;
 use crate::ecs::layout::{Column, LayoutStrip, StackItem, StackMode};
 use crate::ecs::params::{ActiveDisplay, ActiveDisplayMut, Windows};
 use crate::ecs::{
-    AccordionFocusGuard, ActiveDisplayMarker, ActiveWorkspaceMarker, Bounds, FocusFollowsMouse,
-    FocusedMarker, FullWidthMarker, NativeFullscreenMarker, SelectedVirtualMarker,
-    SendMessageTrigger, Unmanaged, WMEventTrigger, focus_entity, reposition_entity,
-    reshuffle_around, resize_entity,
+    AccordionFocusGuard, ActiveDisplayMarker, ActiveWorkspaceMarker, Bounds, FocusedMarker,
+    FullWidthMarker, NativeFullscreenMarker, SelectedVirtualMarker, SendMessageTrigger, Unmanaged,
+    focus_entity, reposition_entity, reshuffle_around, resize_entity,
 };
 use crate::events::Event;
 use crate::manager::{Application, Display, Origin, Size, Window, WindowManager};
@@ -356,7 +355,7 @@ fn command_swap_focus(
         );
 
         if index == new_index
-            && let Some(Column::Stack(stack)) = active_strip.get_column_mut(index)
+            && let Some(Column::Stack(stack, ..)) = active_strip.get_column_mut(index)
         {
             let pos_a = stack.iter().position(|i| i.contains(current))?;
             let pos_b = stack.iter().position(|i| i.contains(other_window))?;
@@ -604,7 +603,7 @@ fn full_width_window(
             .index_of(entity)
             .ok()
             .and_then(|idx| strip.get(idx).ok())
-            .is_some_and(|col| matches!(col, Column::Stack(_)))
+            .is_some_and(|col| matches!(col, Column::Stack(..)))
         {
             _ = strip.unstack(entity);
         }

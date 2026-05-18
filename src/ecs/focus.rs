@@ -15,7 +15,7 @@ use tracing::{Level, debug, error, instrument, trace, warn};
 use super::{FocusedMarker, MouseHeldMarker, PendingMouseWarp, RepositionMarker, SystemTheme};
 use crate::config::Config;
 use crate::ecs::layout::LayoutStrip;
-use crate::ecs::params::{ActiveDisplay, ActiveDisplayMut, Configuration, GlobalState, Windows};
+use crate::ecs::params::{ActiveDisplay, ActiveDisplayMut, GlobalState, Windows};
 use crate::ecs::{
     ActiveWorkspaceMarker, Scrolling, SelectedVirtualMarker, SendMessageTrigger, StrayFocusEvent,
     focus_entity, reposition_entity, reshuffle_around,
@@ -63,7 +63,6 @@ fn maintain_focus_singleton(
     windows: Query<(Entity, Has<FocusedMarker>), With<Window>>,
     mut config: GlobalState,
     mut active_display: ActiveDisplayMut,
-    mut config: Configuration,
     mut commands: Commands,
 ) {
     let focused_entity = trigger.event().entity;

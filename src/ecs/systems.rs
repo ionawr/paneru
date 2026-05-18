@@ -847,7 +847,7 @@ pub(super) fn update_overlays(
         return;
     };
 
-    if swiping || mission_control_active.0 || active_strip.is_fullscreen() {
+    if swiping || mission_control_active.0 || focused_strip.is_fullscreen() {
         overlay_mgr.hide_all();
         return;
     }

@@ -1,12 +1,11 @@
 use bevy::app::{App, Plugin, Update};
-use bevy::ecs::change_detection::{DetectChanges as _, DetectChangesMut as _};
+use bevy::ecs::change_detection::DetectChangesMut as _;
 use bevy::ecs::component::Component;
 use bevy::ecs::entity::{Entity, EntityHashSet};
 use bevy::ecs::hierarchy::ChildOf;
 use bevy::ecs::query::{Changed, Has, Or, With, Without};
 use bevy::ecs::schedule::IntoScheduleConfigs as _;
 use bevy::ecs::schedule::common_conditions::{not, resource_exists};
-use bevy::ecs::system::{ParallelCommands, Populated, Query, Res};
 use bevy::ecs::system::{Commands, ParallelCommands, Populated, Query, Res};
 use bevy::math::IRect;
 use std::collections::VecDeque;
@@ -15,7 +14,7 @@ use tracing::{Level, instrument, trace};
 
 use crate::config::Config;
 use crate::ecs::FocusedMarker;
-use crate::ecs::params::{ActiveDisplay, Windows};
+use crate::ecs::params::Windows;
 use crate::ecs::{
     Bounds, DockPosition, FullWidthMarker, Initializing, LayoutPosition, Position,
     ReshuffleAroundMarker, ResizeMarker, Scrolling, reposition_entity,
@@ -1107,26 +1106,6 @@ fn position_layout_windows(
             // a `sliver_height` fraction of their height at the viewport's
             // vertical center.
             if !swiping && offscreen {
-                let stacked = layout_strip
-                    .index_of(entity)
-                    .ok()
-                    .and_then(|idx| layout_strip.get(idx).ok())
-                    .is_some_and(|col| matches!(col, Column::Stack(_)));
-
-            // Don't compress stacked windows vertically when off-screen.
-            // The height reduction corrupts their proportions: when the
-            // column scrolls back on-screen, binpack_heights makes the
-            // last window absorb all remaining space.
-            if !stacked {
-                let inset =
-                    (f64::from(viewport.height()) * (1.0 - config.sliver_height()) / 2.0) as i32;
-                frame.min.y += inset;
-                frame.max.y += inset;
-            }
-            frame.max.x = frame.min.x + width;
-
-            // During swipe, keep full height.
-            if !swiping {
                 let stacked = layout_strip
                     .index_of(entity)
                     .ok()

@@ -20,7 +20,7 @@ use super::{
 };
 use crate::config::{Config, WindowParams};
 use crate::ecs::layout::{Column, LayoutStrip, StackMode};
-use crate::ecs::params::{ActiveDisplay, ActiveDisplayMut, Configuration, GlobalState, Windows};
+use crate::ecs::params::{ActiveDisplay, ActiveDisplayMut, GlobalState, Windows};
 use crate::ecs::state::PaneruState;
 use crate::ecs::workspace::PreviousStripPosition;
 use crate::ecs::{
