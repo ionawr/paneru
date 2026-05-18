@@ -357,6 +357,12 @@ pub struct AccordionFocusGuard(pub Option<std::time::Instant>);
 #[derive(Component)]
 pub struct MouseHeldMarker(pub Entity);
 
+/// Marker for a deferred mouse warp. Inserted when `mouse_follows_focus`
+/// skips a warp because the focused window is off-screen. A later system
+/// performs the warp once the window has been scrolled into view.
+#[derive(Component)]
+pub struct PendingMouseWarp;
+
 /// Resource indicating whether Mission Control is currently active.
 #[derive(PartialEq, Resource)]
 pub struct MissionControlActive(pub bool);

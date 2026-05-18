@@ -2,17 +2,17 @@ use std::time::Duration;
 
 use bevy::app::{App, Plugin, PostUpdate};
 use bevy::ecs::entity::Entity;
-use bevy::ecs::hierarchy::ChildOf;
 use bevy::ecs::lifecycle::{Add, Remove};
 use bevy::ecs::observer::On;
 use bevy::ecs::query::{Added, Has, With};
 use bevy::ecs::schedule::IntoScheduleConfigs as _;
 use bevy::ecs::system::{Commands, Populated, Query, Res, Single};
+use bevy::math::{IRect, IVec2};
 use bevy::prelude::Event as BevyEvent;
 use bevy::time::common_conditions::on_timer;
 use tracing::{Level, debug, error, instrument, trace, warn};
 
-use super::{FocusedMarker, MouseHeldMarker, SystemTheme};
+use super::{FocusedMarker, MouseHeldMarker, PendingMouseWarp, RepositionMarker, SystemTheme};
 use crate::config::Config;
 use crate::ecs::layout::LayoutStrip;
 use crate::ecs::params::{ActiveDisplay, ActiveDisplayMut, Configuration, GlobalState, Windows};
@@ -21,7 +21,7 @@ use crate::ecs::{
     focus_entity, reposition_entity, reshuffle_around,
 };
 use crate::events::Event;
-use crate::manager::{Application, Display, Window, WindowManager};
+use crate::manager::{Application, Window, WindowManager};
 
 const REFRESH_WINDOW_CHECK_FREQ_MS: u64 = 1000;
 pub struct FocusEventsPlugin;
@@ -32,7 +32,10 @@ impl Plugin for FocusEventsPlugin {
             PostUpdate,
             (
                 autocenter_window_on_focus.after(super::systems::animate_resize_entities),
-                mouse_follows_focus.after(super::systems::animate_resize_entities),
+                mouse_follows_focus
+                    .after(super::systems::animate_resize_entities)
+                    .after(autocenter_window_on_focus),
+                deferred_mouse_warp.after(super::systems::commit_window_position),
                 recover_lost_focus.run_if(on_timer(Duration::from_millis(
                     REFRESH_WINDOW_CHECK_FREQ_MS,
                 ))),
@@ -127,22 +130,16 @@ fn mouse_follows_focus(
     windows: Windows,
     global_state: GlobalState,
     config: Res<Config>,
-    window_manager: Res<WindowManager>,
-    displays: Query<&Display>,
-    workspaces: Query<(
-        &LayoutStrip,
-        &ChildOf,
-        Option<&Scrolling>,
-        Has<ActiveWorkspaceMarker>,
-    )>,
+    active_workspace: Query<&Scrolling, With<ActiveWorkspaceMarker>>,
+    mut commands: Commands,
 ) {
     let entity = *focused;
     let Some(window) = windows.get(entity) else {
         return;
     };
-    if workspaces
+    if active_workspace
         .iter()
-        .find_map(|(_, _, scrolling, active)| if active { scrolling } else { None })
+        .next()
         .is_some_and(|scrolling| scrolling.is_user_swiping)
     {
         debug!("Suppressing center mouse due to a swipe");
@@ -155,20 +152,75 @@ fn mouse_follows_focus(
         global_state.skip_reshuffle(),
         global_state.ffm_flag()
     );
+    // Always defer: autocenter_window_on_focus calls reshuffle_around which
+    // may reposition the strip, so the window's final position is not known
+    // until the animation has finished. deferred_mouse_warp handles the
+    // actual warp once all RepositionMarkers have been consumed.
     if config.mouse_follows_focus()
         && !global_state.skip_reshuffle()
         && global_state.ffm_flag().is_none_or(|id| id != window.id())
-        && let Some(frame) = windows.moving_frame(entity)
-        && let Some(display_bounds) = workspaces
-            .into_iter()
-            .find_map(|(strip, child, _, _)| strip.contains(entity).then_some(child))
-            .and_then(|child| displays.get(child.parent()).ok())
-            .map(Display::bounds)
     {
-        let visible = display_bounds.intersect(frame);
-        let origin = visible.center();
-        debug!("centering on {} {origin}", window.id());
-        window_manager.warp_mouse(origin);
+        debug!("deferring mouse warp for {}", window.id());
+        if let Ok(mut cmd) = commands.get_entity(entity) {
+            cmd.try_insert(PendingMouseWarp);
+        }
+    }
+}
+
+/// Returns the warp target for a window frame on the given display, or `None`
+/// if the window is not visible enough for a meaningful cursor placement.
+///
+/// When the window centre is inside the display the geometric centre is
+/// returned directly. Otherwise the centre of the visible intersection is
+/// used, provided the visible width is at least a third of the full window
+/// width (avoids warping to a thin sliver at the display edge).
+fn visible_warp_target(display: IRect, frame: IRect) -> Option<IVec2> {
+    let visible = display.intersect(frame);
+    if visible.height() <= 0 {
+        return None;
+    }
+    if display.contains(frame.center()) {
+        return Some(frame.center());
+    }
+    // Partly visible: require enough overlap to avoid edge-warping.
+    if visible.width() > frame.width() / 3 {
+        return Some(visible.center());
+    }
+    None
+}
+
+#[allow(clippy::needless_pass_by_value, clippy::type_complexity)]
+#[instrument(level = Level::TRACE, skip_all)]
+pub(super) fn deferred_mouse_warp(
+    pending: Populated<
+        (Entity, Has<RepositionMarker>),
+        (With<PendingMouseWarp>, With<FocusedMarker>),
+    >,
+    active_workspace: Query<Has<RepositionMarker>, With<ActiveWorkspaceMarker>>,
+    windows: Windows,
+    config: Res<Config>,
+    active_display: ActiveDisplay,
+    window_manager: Res<WindowManager>,
+    mut commands: Commands,
+) {
+    let strip_animating = active_workspace.iter().any(|animating| animating);
+
+    for (entity, window_animating) in pending.iter() {
+        if window_animating || strip_animating {
+            continue;
+        }
+        let Some(frame) = windows.moving_frame(entity) else {
+            continue;
+        };
+        if let Some(target) = visible_warp_target(active_display.bounds(), frame)
+            && config.mouse_follows_focus()
+        {
+            debug!("deferred warp to {target}");
+            window_manager.warp_mouse(target);
+            if let Ok(mut cmd) = commands.get_entity(entity) {
+                cmd.try_remove::<PendingMouseWarp>();
+            }
+        }
     }
 }
 
